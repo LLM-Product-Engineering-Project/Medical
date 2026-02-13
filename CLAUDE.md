@@ -8,10 +8,31 @@
 ## 프로젝트 구조
 
 ```
-main.py                 # LangGraph 워크플로우 (핵심 파이프라인)
-practice_rag.ipynb      # ChromaDB RAG 프로토타입 (별도 실행)
-medical_2.csv           # 서울대병원 의학정보 (병명, 생활가이드, 식이요법)
-docs/                   # 기획서, 멘토링 리뷰, 아키텍처 다이어그램
+main.py                              # 엔트리포인트 (thin wrapper)
+src/medical_workflow/
+├── __init__.py
+├── config.py                        # 환경 변수, LLM/Tavily 초기화
+├── state.py                         # WFState TypedDict
+├── stores.py                        # THREAD_STORE, VISIT_STORE, 헬퍼
+├── graph.py                         # build_graph()
+├── runner.py                        # run_many(), main()
+└── nodes/
+    ├── __init__.py
+    ├── input.py                     # 메타 파싱, 개인정보 비식별화
+    ├── extraction.py                # LLM 임상정보 추출, 진단 판단
+    ├── thread.py                    # 스레드 CRUD, 종료 감지
+    ├── memory.py                    # 메모리 조회, 리플렉션
+    ├── guidelines.py                # 가이드라인 유무 판단, 요약, 안전성
+    ├── search.py                    # Tavily 검색 파이프라인
+    ├── planning.py                  # 액션 계획, HITL 동의
+    ├── alarm.py                     # 알람 계획 생성
+    └── finalize.py                  # 메모리/이벤트 저장, 최종 응답
+data/
+└── medical_2.csv                    # 서울대병원 의학정보
+notebooks/
+└── practice_rag.ipynb               # ChromaDB RAG 프로토타입
+tests/                               # 테스트 (향후 추가)
+docs/                                # 기획서, 멘토링 리뷰, 아키텍처 다이어그램
 ```
 
 ## 기술 스택
@@ -27,7 +48,7 @@ docs/                   # 기획서, 멘토링 리뷰, 아키텍처 다이어그
 | 패키지 관리 | uv + pyproject.toml | Python >=3.10 |
 | 트레이싱 | LangSmith | 선택사항 |
 
-## main.py 워크플로우
+## 워크플로우 (src/medical_workflow/)
 
 ### 파이프라인 흐름
 
@@ -83,11 +104,11 @@ ChromaDB + UpstageEmbeddings 기반 RAG. main.py와 **별도로** 동작.
 
 | 기획서 항목 | 구현 위치 | 상태 |
 |:--|:--|:--|
-| 기능1: 진료 기록 자동화 | main.py | 완료 |
-| 기능2: 생활습관 관리 | main.py (알람 생성) | 완료 |
-| RAG (ChromaDB + 서울대병원 데이터) | practice_rag.ipynb | 프로토타입 완료 |
-| Solar pro2 LLM | main.py | 완료 |
-| Workflow 오케스트레이션 | main.py (LangGraph) | 완료 |
+| 기능1: 진료 기록 자동화 | src/medical_workflow/ | 완료 |
+| 기능2: 생활습관 관리 | src/medical_workflow/nodes/alarm.py | 완료 |
+| RAG (ChromaDB + 서울대병원 데이터) | notebooks/practice_rag.ipynb | 프로토타입 완료 |
+| Solar pro2 LLM | src/medical_workflow/config.py | 완료 |
+| Workflow 오케스트레이션 | src/medical_workflow/graph.py (LangGraph) | 완료 |
 
 ### 코드에서 추가 구현 (기획서에 미기재)
 

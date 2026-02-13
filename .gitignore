@@ -48,7 +48,9 @@ Recording_*.txt
 
 # Jupyter
 .ipynb_checkpoints/
+# notebooks/ 디렉토리의 노트북은 추적
 *.ipynb
+!notebooks/*.ipynb
 
 # LangSmith
 .langsmith/
