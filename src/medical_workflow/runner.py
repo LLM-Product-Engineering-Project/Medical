@@ -6,12 +6,12 @@ import json
 import glob
 
 from langchain_openai import ChatOpenAI
-from langchain_tavily import TavilySearch
 
 from medical_workflow.config import load_env_keys
 from medical_workflow.state import WFState
 from medical_workflow.stores import THREAD_STORE, VISIT_STORE
 from medical_workflow.graph import build_graph
+from medical_workflow.nodes.rag import build_medical_vector_db
 
 
 def run_many(input_dir: str, default_patient_id: str = "p1", reset_stores: bool = False):
@@ -33,8 +33,15 @@ def run_many(input_dir: str, default_patient_id: str = "p1", reset_stores: bool 
         api_key=os.environ.get("UPSTAGE_API_KEY"),
         temperature=0.1,
     )
-    tavily = TavilySearch(api_key=os.environ.get("TAVILY_API_KEY"))
-    graph = build_graph(llm, tavily)
+
+    # 의료 정보 신뢰성을 위해 RAG(벡터 DB) 사용 — Tavily 검색 미사용
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    data_path = os.path.join(project_root, "data", "medical_2.csv")
+    if not os.path.isfile(data_path):
+        raise FileNotFoundError(f"의료 RAG용 데이터 파일이 없습니다: {data_path}")
+    vector_db = build_medical_vector_db(data_path)
+    retriever = vector_db.as_retriever(search_kwargs={"k": 3})
+    graph = build_graph(llm, retriever)
 
     paths = sorted(glob.glob(os.path.join(input_dir, "Recording_*.txt")))
     if not paths:

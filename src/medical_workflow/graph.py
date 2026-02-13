@@ -2,7 +2,6 @@
 
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
-from langchain_tavily import TavilySearch
 
 from medical_workflow.state import WFState
 from medical_workflow.nodes.input import n_parse_input_meta, n_deidentify_redact
@@ -10,126 +9,191 @@ from medical_workflow.nodes.extraction import n_extract_doctor, n_extract_clinic
 from medical_workflow.nodes.thread import n_is_existing, n_create_thread, n_load_thread, n_detect_closure, n_close_thread
 from medical_workflow.nodes.memory import n_retrieve_memories, n_should_reflect, n_reflect_patient_state
 from medical_workflow.nodes.guidelines import n_has_guideline, n_summarize_guidelines, n_safety_check
-from medical_workflow.nodes.search import n_tavily_query_sanitize, n_tavily_search, n_tavily_to_guidelines
+from medical_workflow.nodes.search import n_tavily_query_sanitize, n_tavily_to_guidelines
+from medical_workflow.nodes.rag import n_rag_search
 from medical_workflow.nodes.planning import n_plan_next_actions, n_hitl_alarm_opt_in
 from medical_workflow.nodes.alarm import n_build_alarm_plan
 from medical_workflow.nodes.finalize import n_finalize
 
 
-def build_graph(llm: ChatOpenAI, tavily: TavilySearch):
+def build_graph(llm: ChatOpenAI, retriever):
+    """
+    llm: LLM 객체 (ChatOpenAI)
+    retriever: RAG용 retriever (예: vector_db.as_retriever(search_kwargs={"k": 3}))
+
+    의료 정보 신뢰성을 위해 외부 실시간 검색 대신
+    내부 검증된 문서 기반 RAG 검색을 사용합니다.
+    """
+
+    # 상태 기반 워크플로우 그래프 생성
     g = StateGraph(WFState)
 
+    # ---------------------------
+    # 1️⃣ 노드 등록 (각 처리 단계 정의)
+    # ---------------------------
+
+    # 입력 전처리
     g.add_node("parse_input_meta", n_parse_input_meta)
     g.add_node("deidentify_redact", n_deidentify_redact)
 
+    # 임상 정보 추출 (LLM 사용)
     g.add_node("extract_doctor", lambda s: n_extract_doctor(s, llm))
     g.add_node("extract_clinical", lambda s: n_extract_clinical(s, llm))
     g.add_node("has_diag", lambda s: n_has_diagnosis(s, llm))
 
+    # 스레드 관리
     g.add_node("is_existing", lambda s: n_is_existing(s, llm))
     g.add_node("create_thread", lambda s: n_create_thread(s, llm))
     g.add_node("load_thread", lambda s: n_load_thread(s, llm))
 
+    # 메모리 조회
     g.add_node("retrieve_memories", n_retrieve_memories)
 
+    # 종료 판단
     g.add_node("detect_closure", lambda s: n_detect_closure(s, llm))
     g.add_node("close_thread", lambda s: n_close_thread(s, llm))
 
+    # 가이드라인 처리
     g.add_node("has_guideline", lambda s: n_has_guideline(s, llm))
     g.add_node("summarize_guidelines", lambda s: n_summarize_guidelines(s, llm))
 
+    # RAG 검색 흐름
     g.add_node("tavily_query_sanitize", lambda s: n_tavily_query_sanitize(s, llm))
-    g.add_node("tavily_search", lambda s: n_tavily_search(s, tavily))
+    g.add_node("rag_search", lambda s: n_rag_search(s, retriever))
     g.add_node("tavily_to_guidelines", lambda s: n_tavily_to_guidelines(s, llm))
 
+    # 안전성 검증
     g.add_node("safety_check", lambda s: n_safety_check(s, llm))
 
+    # 환자 상태 반영
     g.add_node("should_reflect", n_should_reflect)
     g.add_node("reflect_patient_state", lambda s: n_reflect_patient_state(s, llm))
 
+    # 행동 계획 수립
     g.add_node("plan_next_actions", lambda s: n_plan_next_actions(s, llm))
 
+    # 알람 관련
     g.add_node("hitl_alarm_opt_in", lambda s: n_hitl_alarm_opt_in(s, llm))
     g.add_node("build_alarm_plan", lambda s: n_build_alarm_plan(s, llm))
 
+    # 최종 응답 생성
     g.add_node("finalize", lambda s: n_finalize(s, llm))
 
+    # 시작 노드 설정
     g.set_entry_point("parse_input_meta")
 
-    # START -> privacy -> extract -> has_diag
+    # ---------------------------
+    # 2️⃣ 기본 흐름 정의
+    # ---------------------------
+
+    # 입력 → 비식별화 → 정보 추출 → 진단 여부 판단
     g.add_edge("parse_input_meta", "deidentify_redact")
     g.add_edge("deidentify_redact", "extract_doctor")
     g.add_edge("extract_doctor", "extract_clinical")
     g.add_edge("extract_clinical", "has_diag")
 
-    # has_diag
+    # ---------------------------
+    # 3️⃣ 진단 여부 분기
+    # ---------------------------
+
+    # 진단이 없으면 바로 종료
+    # 진단이 있으면 스레드 관리로 이동
     g.add_conditional_edges(
         "has_diag",
         lambda s: "yes" if s.get("has_diagnosis") else "no",
         {"yes": "is_existing", "no": "finalize"},
     )
 
-    # is_existing -> load/create
+    # ---------------------------
+    # 4️⃣ 기존 스레드 여부 분기
+    # ---------------------------
+
     g.add_conditional_edges(
         "is_existing",
         lambda s: "load" if s.get("is_existing") else "create",
         {"load": "load_thread", "create": "create_thread"},
     )
 
-    # load/create -> retrieve_memories -> detect_closure
+    # 로드/생성 후 → 메모리 조회 → 종료 여부 판단
     g.add_edge("load_thread", "retrieve_memories")
     g.add_edge("create_thread", "retrieve_memories")
     g.add_edge("retrieve_memories", "detect_closure")
 
-    # detect_closure -> close or keep
+    # ---------------------------
+    # 5️⃣ 스레드 종료 여부 분기
+    # ---------------------------
+
     g.add_conditional_edges(
         "detect_closure",
         lambda s: "close" if s.get("should_close") else "keep",
         {"close": "close_thread", "keep": "has_guideline"},
     )
 
-    # close_thread -> finalize -> END
+    # 종료 시 바로 finalize
     g.add_edge("close_thread", "finalize")
     g.add_edge("finalize", END)
 
-    # keep path: has_guideline -> summarize or tavily
+    # ---------------------------
+    # 6️⃣ 가이드라인 확보
+    # ---------------------------
+
+    # 이미 가이드라인 있으면 요약
+    # 없으면 RAG 검색 수행
     g.add_conditional_edges(
         "has_guideline",
         lambda s: "yes" if s.get("has_guideline") else "no",
         {"yes": "summarize_guidelines", "no": "tavily_query_sanitize"},
     )
 
+    # 요약 → 안전성 검사
     g.add_edge("summarize_guidelines", "safety_check")
 
-    g.add_edge("tavily_query_sanitize", "tavily_search")
-    g.add_edge("tavily_search", "tavily_to_guidelines")
+    # 검색 → 가이드라인 변환 → 안전성 검사
+    g.add_edge("tavily_query_sanitize", "rag_search")
+    g.add_edge("rag_search", "tavily_to_guidelines")
     g.add_edge("tavily_to_guidelines", "safety_check")
 
-    # safety_check -> should_reflect? -> (reflect or skip) -> plan
+    # ---------------------------
+    # 7️⃣ 안전성 이후 환자 상태 반영 여부
+    # ---------------------------
+
     g.add_edge("safety_check", "should_reflect")
+
     g.add_conditional_edges(
         "should_reflect",
         lambda s: "yes" if s.get("should_reflect") else "no",
         {"yes": "reflect_patient_state", "no": "plan_next_actions"},
     )
+
     g.add_edge("reflect_patient_state", "plan_next_actions")
 
-    # plan -> ask_hitl or build_alarm or finalize
+    # ---------------------------
+    # 8️⃣ 행동 계획 분기
+    # ---------------------------
+
     g.add_conditional_edges(
         "plan_next_actions",
         lambda s: s.get("plan_action", "finalize"),
-        {"ask_hitl": "hitl_alarm_opt_in", "build_alarm": "build_alarm_plan", "finalize": "finalize"},
+        {
+            "ask_hitl": "hitl_alarm_opt_in",   # 알람 동의 물어보기
+            "build_alarm": "build_alarm_plan", # 바로 알람 생성
+            "finalize": "finalize"             # 그냥 종료
+        },
     )
 
-    # hitl -> build_alarm or finalize
+    # ---------------------------
+    # 9️⃣ HITL 알람 동의 분기
+    # ---------------------------
+
     g.add_conditional_edges(
         "hitl_alarm_opt_in",
         lambda s: "yes" if s.get("alarm_opt_in") is True else "no",
         {"yes": "build_alarm_plan", "no": "finalize"},
     )
 
-    # build_alarm_plan -> finalize -> END
+    # 알람 생성 후 종료
     g.add_edge("build_alarm_plan", "finalize")
     g.add_edge("finalize", END)
 
+    # 그래프 컴파일 후 반환
     return g.compile()

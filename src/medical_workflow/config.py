@@ -12,9 +12,8 @@ except ImportError:
 def load_env_keys():
     """환경 변수에서 API 키 로드"""
     required_keys = [
-        'LANGSMITH_API_KEY',
-        'UPSTAGE_API_KEY',
-        'TAVILY_API_KEY',
+        "LANGSMITH_API_KEY",
+        "UPSTAGE_API_KEY",
     ]
 
     missing_keys = []

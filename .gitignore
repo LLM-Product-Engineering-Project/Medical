@@ -4,7 +4,9 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.venv/
 build/
+.env
 develop-eggs/
 dist/
 downloads/
@@ -54,3 +56,4 @@ Recording_*.txt
 
 # LangSmith
 .langsmith/
+.env
