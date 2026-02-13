@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Agent 기반 진료 관리 서비스 - 아키텍처 다이어그램</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  body {
+    display: flex;
+    justify-content: center;
+    background: #fff;
+    padding: 40px 20px;
+    font-family: 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  }
+  .container {
+    max-width: 1000px;
+    width: 100%;
+  }
+  h1 {
+    font-size: 1.4rem;
+    text-align: center;
+    margin-bottom: 12px;
+    color: #1a1a1a;
+  }
+  p.note {
+    text-align: center;
+    color: #888;
+    font-size: 0.85rem;
+    margin-bottom: 32px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>아키텍처 다이어그램 — Agent 기반 진료 관리 서비스</h1>
+  <p class="note">원본 image1 기반 재구성 (점선 = 피드백 루프)</p>
+  <pre class="mermaid">
+flowchart TD
+    Start(["진료 녹음 파일 수신"])
+    --> STT["STT 실행 및 텍스트 변환"]
+    --> Extract["진단/처방 및 관련 정보 추출"]
+    --> D1{"진단/질환\n식별 가능?"}
+
+    D1 -- "아니오" --> Check["기존 질환 여부 확인"]
+    D1 -- "예" --> Check
+
+    Check -- "아니오" --> NewThread["새 질환 관리\nthread 생성"]
+    Check -- "예" --> ExistThread["기존 질환 관리\nthread 조회"]
+
+    NewThread --> Merge["thread 정보 통합"]
+    ExistThread --> Merge
+
+    Merge --> D2{"의사 지침 &\n지식 추가 필요한가?"}
+
+    D2 -- "아니오" --> Checklist["생활습관 체크리스트\n생성/업데이트"]
+    D2 -- "필요시" --> RAG["보조 RAG/검색 기반\n지식 수집"]
+    RAG --> SafeFilter["신뢰성 검증 &\n안전 필터링"]
+    SafeFilter --> Checklist
+
+    Checklist --> Verify["의료 안전성 검증 결과 반영"]
+
+    Verify --> D3{"의료 전문가/환자 확인\n필요 여부 판단"}
+
+    D3 -- "예" --> Save["환자 및 기록 저장"]
+    Save --> End1(["종료"])
+
+    D3 -- "thread 저장" --> ThreadSave["thread 상태 저장"]
+    ThreadSave --> End1
+
+    D3 -- "아니오" --> ThreadClose["thread 종료"]
+    ThreadClose --> End2(["다른 질문"])
+
+    %% 피드백 루프 (원본 점선 화살표)
+    End2 -.->|"재처리"| Start
+    Checklist -.->|"재분석"| Extract
+
+    style Start fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    style End1 fill:#e8f5e9,stroke:#43a047,stroke-width:2px
+    style End2 fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
+    style D1 fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    style D2 fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    style D3 fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    style Check fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
+    style SafeFilter fill:#fce4ec,stroke:#e53935,stroke-width:2px
+    style Verify fill:#fce4ec,stroke:#e53935,stroke-width:2px
+  </pre>
+</div>
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    flowchart: { curve: 'basis', padding: 20 }
+  });
+</script>
+</body>
+</html>
