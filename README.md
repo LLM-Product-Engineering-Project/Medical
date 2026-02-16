@@ -22,6 +22,8 @@ brew install uv
 uv sync
 ```
 
+> **참고**: `uv sync`는 자동으로 `.venv` 가상환경을 생성하고 모든 의존성을 설치합니다.
+
 ### 3. 환경 변수 설정
 
 `.env` 파일을 편집하여 API 키를 입력:
@@ -42,22 +44,47 @@ Medical/
 ├── Recording_20240101.txt
 ├── Recording_20240102.txt
 ├── main.py                         # 엔트리포인트 (thin wrapper)
+├── data/
+│   └── medical_2.csv               # 서울대병원 의학정보
 └── src/medical_workflow/           # 핵심 로직
     ├── runner.py                   # 멀티 파일 러너
     ├── graph.py                    # LangGraph 워크플로우
     ├── state.py                    # 상태 정의
     ├── config.py                   # 환경 변수 로드
-    ├── stores.py                   # In-memory 저장소
-    └── nodes/                      # 그래프 노드들
+    ├── stores.py                   # 하위 호환 래퍼
+    ├── utils/                      # 유틸리티 패키지
+    │   ├── llm.py                  # safe_llm_invoke
+    │   ├── parsing.py              # parse_json_safely
+    │   └── helpers.py              # thread_key, now_iso
+    ├── stores/                     # 저장소 패키지
+    │   ├── thread.py               # THREAD_STORE 관리
+    │   └── visit.py                # VISIT_STORE 관리
+    └── nodes/                      # 그래프 노드들 (23개)
+        ├── input.py                # 메타 파싱, 비식별화
+        ├── extraction.py           # 임상 정보 추출
+        ├── thread.py               # 스레드 관리
+        ├── memory.py               # 메모리 조회, 리플렉션
+        ├── guidelines.py           # 가이드라인 처리
+        ├── rag.py                  # RAG 검색
+        ├── search.py               # RAG 파이프라인
+        ├── planning.py             # 액션 계획
+        ├── alarm.py                # 알람 생성
+        └── finalize.py             # 최종 응답
 ```
 
 ```bash
-# 가상환경 활성화 후
-source .venv/bin/activate
-python main.py
-
-# 또는 uv로 직접 실행
+# 방법 1: uv로 직접 실행 (권장)
 uv run python main.py
+
+# 방법 2: 가상환경 활성화 후 실행
+# macOS/Linux
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+
+# 이후 실행
+python main.py
 ```
 
 ## 주요 기능
@@ -115,3 +142,29 @@ run_many("/path/to/recordings", reset_stores=True)
 | 패키지 설치 오류 | 가상환경 문제 | `rm -rf .venv && uv sync` |
 | `final_answer`에 에러 포함 | LLM 호출 일부 실패 | 정상 동작 (fallback 사용), 로그 확인 |
 | ChromaDB 초기화 오류 | medical_2.csv 파일 없음 | data/ 디렉토리에 CSV 파일 확인 |
+
+## 프로젝트 구조 개선사항
+
+### 최근 리팩토링 (2026-02)
+
+**Phase 1-3 완료: 모듈화 및 표준화**
+
+1. **유틸리티 분리** (`src/medical_workflow/utils/`)
+   - `llm.py`: 안전한 LLM 호출 (`safe_llm_invoke`)
+   - `parsing.py`: JSON 파싱 유틸리티
+   - `helpers.py`: 공통 헬퍼 함수
+
+2. **저장소 분리** (`src/medical_workflow/stores/`)
+   - `thread.py`: 스레드 저장소 관리
+   - `visit.py`: 방문 기록 저장소 관리
+   - `stores.py`: 하위 호환성 유지 래퍼
+
+3. **환경 표준화**
+   - ✅ `.venv` 표준 가상환경 사용 (Python 3.12)
+   - ✅ `uv` 단일 패키지 관리자
+   - ✅ `pyproject.toml` 기반 의존성 관리
+
+4. **정리된 파일**
+   - ❌ `requirements.txt`, `requirements-dev.txt` (중복 제거)
+   - ❌ `.python-version` (pyproject.toml로 통일)
+   - ❌ `notebooks/` (docs/archived/로 이동)

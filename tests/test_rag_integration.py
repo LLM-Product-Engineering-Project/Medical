@@ -48,11 +48,11 @@ def test_n_rag_search_with_mock_retriever():
             return [Document(page_content=f"질환명: {query}\n[생활가이드]\n테스트 가이드 내용")]
 
     retriever = MockRetriever()
-    state = {"diagnosis_key": "후두암", "tavily_query": "후두암 관리 방법"}
+    state = {"diagnosis_key": "후두암", "rag_query": "후두암 관리 방법"}
     out = n_rag_search(state, retriever)
-    assert "tavily_raw" in out
-    assert "테스트 가이드" in out["tavily_raw"]
-    assert "후두암" in out["tavily_raw"] or "관리 방법" in out["tavily_raw"]
+    assert "rag_raw" in out
+    assert "테스트 가이드" in out["rag_raw"]
+    assert "후두암" in out["rag_raw"] or "관리 방법" in out["rag_raw"]
     print("[OK] n_rag_search (목 retriever) 동작 정상")
 
 
@@ -124,7 +124,7 @@ def test_build_vector_db_and_retrieve():
 
 
 def test_n_rag_search_node():
-    """n_rag_search 노드가 state에 tavily_raw를 채우는지 확인"""
+    """n_rag_search 노드가 state에 rag_raw를 채우는지 확인"""
     _skip_if_no_api_key()
     from medical_workflow.nodes.rag import build_medical_vector_db, n_rag_search
 
@@ -136,11 +136,11 @@ def test_n_rag_search_node():
     vector_db = build_medical_vector_db(data_path)
     retriever = vector_db.as_retriever(search_kwargs={"k": 2})
 
-    state = {"diagnosis_key": "후두암", "tavily_query": "후두암 관리 방법"}
+    state = {"diagnosis_key": "후두암", "rag_query": "후두암 관리 방법"}
     out = n_rag_search(state, retriever)
-    assert "tavily_raw" in out
-    assert len(out["tavily_raw"]) > 20
-    print("[OK] n_rag_search 노드 동작 정상, tavily_raw 길이:", len(out["tavily_raw"]))
+    assert "rag_raw" in out
+    assert len(out["rag_raw"]) > 20
+    print("[OK] n_rag_search 노드 동작 정상, rag_raw 길이:", len(out["rag_raw"]))
     return True
 
 
