@@ -34,9 +34,9 @@ class WFState(TypedDict, total=False):
     has_guideline: bool
     doctor_summary: Optional[str]
 
-    # tavily
-    tavily_query: Optional[str]
-    tavily_raw: Optional[Dict[str, Any]]
+    # RAG
+    rag_query: Optional[str]
+    rag_raw: Optional[Dict[str, Any]]
     rag_guidelines: Optional[List[Dict[str, Any]]]
 
     # safety
@@ -59,6 +59,10 @@ class WFState(TypedDict, total=False):
 
     # alarm
     alarm_plan: Optional[Dict[str, Any]]
+
+    # error tracking
+    errors: List[Dict[str, Any]]
+    warnings: List[str]
 
     # output
     final_answer: Dict[str, Any]

@@ -44,23 +44,23 @@ def build_medical_vector_db(file_path: str):
 
 def n_rag_search(s: WFState, retriever) -> WFState:
     """
-    WFState의 tavily_query(또는 diagnosis_key)로 RAG 검색 후,
-    tavily_raw에 검색 결과 텍스트를 넣어 n_tavily_to_guidelines에서 그대로 사용할 수 있게 함.
+    WFState의 rag_query(또는 diagnosis_key)로 RAG 검색 후,
+    rag_raw에 검색 결과 텍스트를 넣어 n_rag_to_guidelines에서 사용.
     """
-    query = (s.get("tavily_query") or "").strip()
+    query = (s.get("rag_query") or "").strip()
     if not query and s.get("diagnosis_key"):
         query = f"{s['diagnosis_key']} 관리 방법"
 
     if not query:
-        return {**s, "tavily_raw": "검색 쿼리가 없습니다."}
+        return {**s, "rag_raw": "검색 쿼리가 없습니다."}
 
     try:
         docs = retriever.invoke(query)
     except Exception:
-        return {**s, "tavily_raw": "RAG 검색 중 오류가 발생했습니다."}
+        return {**s, "rag_raw": "RAG 검색 중 오류가 발생했습니다."}
 
     if not docs:
-        return {**s, "tavily_raw": "해당 질환에 대한 신뢰 가능한 가이드가 없습니다."}
+        return {**s, "rag_raw": "해당 질환에 대한 신뢰 가능한 가이드가 없습니다."}
 
     raw_text = "\n\n---\n\n".join(getattr(d, "page_content", str(d)) for d in docs)
-    return {**s, "tavily_raw": raw_text}
+    return {**s, "rag_raw": raw_text}

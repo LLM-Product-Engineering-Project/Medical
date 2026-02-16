@@ -3,7 +3,7 @@
 import json
 
 from medical_workflow.state import WFState
-from medical_workflow.stores import THREAD_STORE, thread_key, now_iso
+from medical_workflow.stores import THREAD_STORE, thread_key, now_iso, safe_llm_invoke
 
 
 def n_retrieve_memories(s: WFState) -> WFState:
@@ -70,9 +70,19 @@ def n_reflect_patient_state(s: WFState, llm) -> WFState:
 [이번 방문 가이드라인]
 {json.dumps(g, ensure_ascii=False)}
 """
-    resp = llm.invoke(prompt)
-    reflection = resp.content.strip()
 
+    fallback = f"{diag} 관련 진료를 받았습니다."
+    reflection, error = safe_llm_invoke(
+        llm, prompt,
+        node_name="reflect_patient_state",
+        fallback_value=fallback,
+        parse_json=False,
+        severity="low"  # 리플렉션은 보조 기능
+    )
+
+    reflection_text = reflection.strip() if isinstance(reflection, str) else fallback
+
+    # 스레드에 저장
     key = thread_key(s["patient_id"], s["diagnosis_key"])
     t = THREAD_STORE.get(key)
     if t is not None:
@@ -83,8 +93,14 @@ def n_reflect_patient_state(s: WFState, llm) -> WFState:
                 "ts": now_iso(),
                 "visit_id": s.get("visit_id"),
                 "visit_date": s.get("visit_date"),
-                "text": reflection,
+                "text": reflection_text,
             }
         )
 
-    return {**s, "patient_reflection": reflection}
+    new_state = {**s, "patient_reflection": reflection_text}
+    if error:
+        errors = s.get("errors", [])
+        errors.append(error)
+        new_state["errors"] = errors
+
+    return new_state

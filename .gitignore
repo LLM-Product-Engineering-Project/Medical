@@ -40,7 +40,7 @@ ENV/
 Thumbs.db
 
 # Environment variables (template은 commit하므로 주석 처리)
-# .env
+.env
 
 # Input/Output files
 Recording_*.txt

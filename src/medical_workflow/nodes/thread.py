@@ -3,7 +3,7 @@
 from typing import Dict, Any
 
 from medical_workflow.state import WFState
-from medical_workflow.stores import THREAD_STORE, thread_key, parse_json_safely
+from medical_workflow.stores import THREAD_STORE, thread_key, safe_llm_invoke
 
 
 def _ensure_thread_defaults(t: Dict[str, Any]) -> Dict[str, Any]:
@@ -49,12 +49,29 @@ JSON만 출력.
 전사:
 {s["doctor_text"]}
 """
-    resp = llm.invoke(prompt)
-    out = parse_json_safely(resp.content)
-    should_close = False
-    if isinstance(out, dict):
-        should_close = bool(out.get("should_close", False))
-    return {**s, "should_close": should_close}
+    # 기본값: 종료하지 않음 (보수적 접근)
+    fallback = {"should_close": False}
+    out, error = safe_llm_invoke(
+        llm, prompt,
+        node_name="detect_closure",
+        fallback_value=fallback,
+        parse_json=True,
+        severity="medium"
+    )
+
+    should_close = bool(out.get("should_close", False)) if isinstance(out, dict) else False
+
+    new_state = {**s, "should_close": should_close}
+    if error:
+        errors = s.get("errors", [])
+        errors.append(error)
+        new_state["errors"] = errors
+
+        warnings = s.get("warnings", [])
+        warnings.append("ℹ️ 치료 종료 여부를 판단할 수 없어 진료를 계속합니다.")
+        new_state["warnings"] = warnings
+
+    return new_state
 
 
 def n_close_thread(s: WFState, llm) -> WFState:

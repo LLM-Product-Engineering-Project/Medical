@@ -9,7 +9,7 @@ from medical_workflow.nodes.extraction import n_extract_doctor, n_extract_clinic
 from medical_workflow.nodes.thread import n_is_existing, n_create_thread, n_load_thread, n_detect_closure, n_close_thread
 from medical_workflow.nodes.memory import n_retrieve_memories, n_should_reflect, n_reflect_patient_state
 from medical_workflow.nodes.guidelines import n_has_guideline, n_summarize_guidelines, n_safety_check
-from medical_workflow.nodes.search import n_tavily_query_sanitize, n_tavily_to_guidelines
+from medical_workflow.nodes.search import n_rag_query_sanitize, n_rag_to_guidelines
 from medical_workflow.nodes.rag import n_rag_search
 from medical_workflow.nodes.planning import n_plan_next_actions, n_hitl_alarm_opt_in
 from medical_workflow.nodes.alarm import n_build_alarm_plan
@@ -58,9 +58,9 @@ def build_graph(llm: ChatOpenAI, retriever):
     g.add_node("summarize_guidelines", lambda s: n_summarize_guidelines(s, llm))
 
     # RAG 검색 흐름
-    g.add_node("tavily_query_sanitize", lambda s: n_tavily_query_sanitize(s, llm))
+    g.add_node("rag_query_sanitize", lambda s: n_rag_query_sanitize(s, llm))
     g.add_node("rag_search", lambda s: n_rag_search(s, retriever))
-    g.add_node("tavily_to_guidelines", lambda s: n_tavily_to_guidelines(s, llm))
+    g.add_node("rag_to_guidelines", lambda s: n_rag_to_guidelines(s, llm))
 
     # 안전성 검증
     g.add_node("safety_check", lambda s: n_safety_check(s, llm))
@@ -142,16 +142,16 @@ def build_graph(llm: ChatOpenAI, retriever):
     g.add_conditional_edges(
         "has_guideline",
         lambda s: "yes" if s.get("has_guideline") else "no",
-        {"yes": "summarize_guidelines", "no": "tavily_query_sanitize"},
+        {"yes": "summarize_guidelines", "no": "rag_query_sanitize"},
     )
 
     # 요약 → 안전성 검사
     g.add_edge("summarize_guidelines", "safety_check")
 
     # 검색 → 가이드라인 변환 → 안전성 검사
-    g.add_edge("tavily_query_sanitize", "rag_search")
-    g.add_edge("rag_search", "tavily_to_guidelines")
-    g.add_edge("tavily_to_guidelines", "safety_check")
+    g.add_edge("rag_query_sanitize", "rag_search")
+    g.add_edge("rag_search", "rag_to_guidelines")
+    g.add_edge("rag_to_guidelines", "safety_check")
 
     # ---------------------------
     # 7️⃣ 안전성 이후 환자 상태 반영 여부
