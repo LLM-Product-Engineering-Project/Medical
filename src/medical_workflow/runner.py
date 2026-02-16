@@ -4,6 +4,7 @@ import os
 import re
 import json
 import glob
+import argparse
 
 from langchain_openai import ChatOpenAI
 
@@ -34,14 +35,22 @@ def run_many(input_dir: str, default_patient_id: str = "p1", reset_stores: bool 
         temperature=0.1,
     )
 
-    # 의료 정보 신뢰성을 위해 RAG(벡터 DB) 사용 — Tavily 검색 미사용
+    # 의료 정보 신뢰성을 위해 RAG(벡터 DB) 사용, Tavily 검색 미사용
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     data_path = os.path.join(project_root, "data", "medical_2.csv")
     if not os.path.isfile(data_path):
         raise FileNotFoundError(f"의료 RAG용 데이터 파일이 없습니다: {data_path}")
+
+    # 여기가 멈추는지 확인하고 싶으면 이 2줄을 남겨둬도 됨
+    print("[STEP] building vector db...", flush=True)
     vector_db = build_medical_vector_db(data_path)
+    print("[STEP] vector db ready", flush=True)
+
     retriever = vector_db.as_retriever(search_kwargs={"k": 3})
+
+    print("[STEP] building graph...", flush=True)
     graph = build_graph(llm, retriever)
+    print("[STEP] graph ready", flush=True)
 
     paths = sorted(glob.glob(os.path.join(input_dir, "Recording_*.txt")))
     if not paths:
@@ -95,19 +104,27 @@ def run_many(input_dir: str, default_patient_id: str = "p1", reset_stores: bool 
 
 
 def main():
-    """메인 함수"""
+    """메인 함수 (root main.py에서 import 해서 호출되는 진입점)"""
     load_env_keys()
 
-    input_dir = os.path.dirname(os.path.abspath(__file__))
     # runner.py는 src/medical_workflow/ 안에 있으므로 프로젝트 루트 계산
-    project_root = os.path.dirname(os.path.dirname(input_dir))
+    input_dir = os.path.dirname(os.path.abspath(__file__))          # .../src/medical_workflow
+    project_root = os.path.dirname(os.path.dirname(input_dir))      # project root
+
+    default_recordings_dir = os.path.join(project_root, "data", "recordings")
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--input_dir", default=default_recordings_dir)
+    parser.add_argument("--patient_id", default="p1")
+    parser.add_argument("--reset_stores", action="store_true")
+    args, _ = parser.parse_known_args()
 
     print("=" * 60)
     print("의료 진료 전사 분석 워크플로우")
     print("=" * 60)
-    print(f"\n입력 디렉토리: {project_root}")
+    print(f"\n입력 디렉토리: {args.input_dir}")
 
-    run_many(project_root, reset_stores=False)
+    run_many(args.input_dir, default_patient_id=args.patient_id, reset_stores=args.reset_stores)
 
     print("\n" + "=" * 60)
     print("처리 완료")

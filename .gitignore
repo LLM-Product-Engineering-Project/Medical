@@ -43,7 +43,6 @@ Thumbs.db
 .env
 
 # Input/Output files
-Recording_*.txt
 *.db
 *.sqlite
 *.log

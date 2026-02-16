@@ -23,7 +23,7 @@ src/medical_workflow/
     ├── thread.py                    # 스레드 CRUD, 종료 감지
     ├── memory.py                    # 메모리 조회, 리플렉션
     ├── guidelines.py                # 가이드라인 유무 판단, 요약, 안전성
-    ├── search.py                    # Tavily 검색 파이프라인
+    ├── search.py                    # RAG 검색 파이프라인
     ├── planning.py                  # 액션 계획, HITL 동의
     ├── alarm.py                     # 알람 계획 생성
     └── finalize.py                  # 메모리/이벤트 저장, 최종 응답
