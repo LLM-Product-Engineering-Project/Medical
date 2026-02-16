@@ -27,10 +27,11 @@ uv sync
 `.env` 파일을 편집하여 API 키를 입력:
 
 ```
-UPSTAGE_API_KEY=your_key_here       # 필수 - Solar pro2 LLM
-TAVILY_API_KEY=your_key_here        # 필수 - 웹 검색
+UPSTAGE_API_KEY=your_key_here       # 필수 - Solar pro2 LLM, 임베딩
 LANGSMITH_API_KEY=your_key_here     # 선택 - 트레이싱
 ```
+
+> **참고**: Tavily API는 더 이상 사용하지 않습니다. ChromaDB 기반 RAG로 대체되었습니다.
 
 ## 실행
 
@@ -62,11 +63,32 @@ uv run python main.py
 ## 주요 기능
 
 1. **개인정보 비식별화** - 이메일, 전화번호, 주민등록번호, 주소 자동 마스킹
-2. **임상 정보 추출** - LLM 기반 진단명, 치료 가이드라인 추출
+2. **임상 정보 추출** - LLM 기반 진단명, 치료 가이드라인 추출 (에러 핸들링 적용)
 3. **스레드 관리** - 질병별 진료 기록 연속성 유지
 4. **Memory & Reflection** - 누적 기록 기반 환자 상태 요약
-5. **외부 검색** - Tavily를 통한 질병 관리 가이드라인 보완
+5. **RAG 검색** - ChromaDB + 서울대병원 의학정보 (medical_2.csv) 기반 가이드라인 제공
 6. **HITL 알람** - 환자 동의 후 생활습관 알람 일정표 생성
+7. **에러 핸들링** - LLM 노드 실패 시 안전한 fallback 및 명시적 경고
+
+## 에러 핸들링
+
+워크플로우는 LLM 호출 실패 시에도 안전하게 동작합니다:
+
+- **자동 복구**: 개별 노드 실패 시 보수적 기본값 사용
+- **투명성**: `final_answer`에 에러/경고 정보 포함
+- **의료 안전**: 중요 정보 부족 시 명시적 경고 표시
+
+```python
+# 최종 응답 예시
+{
+    "diagnosis_key": "고혈압",
+    "guidelines": [...],
+    "has_errors": True,
+    "has_critical_errors": False,
+    "data_completeness": "complete",
+    "warnings": ["ℹ️ 치료 종료 여부를 판단할 수 없어 진료를 계속합니다."]
+}
+```
 
 ## 커스터마이징
 
@@ -87,7 +109,9 @@ run_many("/path/to/recordings", reset_stores=True)
 
 | 증상 | 원인 | 해결 |
 |:--|:--|:--|
-| `환경 변수가 설정되지 않았습니다` | API 키 미설정 | `.env` 파일에 키 입력 |
+| `환경 변수가 설정되지 않았습니다` | UPSTAGE_API_KEY 미설정 | `.env` 파일에 키 입력 |
 | `Recording_*.txt 파일을 찾을 수 없습니다` | 입력 파일 없음 | 프로젝트 루트에 파일 배치 |
 | `uv: command not found` | uv 미설치 | `pip install uv` 또는 `brew install uv` |
 | 패키지 설치 오류 | 가상환경 문제 | `rm -rf .venv && uv sync` |
+| `final_answer`에 에러 포함 | LLM 호출 일부 실패 | 정상 동작 (fallback 사용), 로그 확인 |
+| ChromaDB 초기화 오류 | medical_2.csv 파일 없음 | data/ 디렉토리에 CSV 파일 확인 |

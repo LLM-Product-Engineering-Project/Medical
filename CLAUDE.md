@@ -38,11 +38,11 @@ docs/                                # 기획서, 멘토링 리뷰, 아키텍처
 | 구성 | 기술 | 비고 |
 |:--|:--|:--|
 | LLM | Solar pro2 (Upstage API) | temperature=0.1 |
-| 임베딩 | solar-embedding-1-large (Upstage) | 노트북에서만 사용 |
+| 임베딩 | solar-embedding-1-large (Upstage) | medical_2.csv RAG용 |
 | 오케스트레이션 | LangGraph StateGraph | Workflow 방식 |
-| 외부 검색 | Tavily (nodes/search.py) | 의사 가이드라인 없을 때 보조 |
-| 벡터DB | ChromaDB (노트북) | medical_2.csv 기반 RAG |
+| RAG 검색 | ChromaDB (nodes/rag.py) | 서울대병원 의학정보 기반 |
 | 저장소 | In-memory dict | THREAD_STORE, VISIT_STORE |
+| 에러 핸들링 | safe_llm_invoke() | LLM 노드 전체 적용 |
 | 패키지 관리 | uv + pyproject.toml | Python >=3.10 |
 | 트레이싱 | LangSmith | 선택사항 |
 
@@ -54,27 +54,32 @@ docs/                                # 기획서, 멘토링 리뷰, 아키텍처
 Recording_*.txt 입력
   → 메타 파싱 (날짜, 환자ID)
   → 개인정보 비식별화 (이메일/전화/주민번호/주소 마스킹)
-  → LLM 임상 정보 추출 (진단명, 가이드라인)
+  → LLM 임상 정보 추출 (진단명, 가이드라인) [에러 핸들링]
   → 진단 여부 분기
       ├─ 없음 → 종료
       └─ 있음 → 스레드 관리 (신규 생성 | 기존 로드)
           → 메모리 조회 (최근 8개 memory + 3개 event)
-          → LLM 종료 감지 (치료 완료?)
+          → LLM 종료 감지 (치료 완료?) [에러 핸들링]
               ├─ 종료 → 스레드 닫기 → 종료
               └─ 계속 → 가이드라인 분기
-                  ├─ 의사 가이드라인 있음 → LLM 요약
-                  └─ 없음 → Tavily 검색 → LLM 가이드라인 변환
+                  ├─ 의사 가이드라인 있음 → LLM 요약 [에러 핸들링]
+                  └─ 없음 → RAG 검색 (ChromaDB) → LLM 가이드라인 변환 [에러 핸들링]
               → 안전성 체크
-              → Reflection (3회마다 or 가이드라인 5개 이상)
+              → Reflection (3회마다 or 가이드라인 5개 이상) [에러 핸들링]
               → 계획 수립
                   ├─ HITL: 알람 동의 질문
                   ├─ 알람 생성: 카테고리별 시간표
-                  └─ 종료
+                  └─ 종료 (에러/경고 정보 포함)
 ```
 
 ### 노드 (23개 그래프 노드)
 
-LLM을 사용하는 노드: `extract_clinical`, `detect_closure`, `summarize_guidelines`, `tavily_to_guidelines`, `reflect_patient_state` (5개)
+LLM을 사용하는 노드 (5개, 모두 에러 핸들링 적용):
+- `extract_clinical` (severity: high) - 임상 정보 추출
+- `detect_closure` (severity: medium) - 치료 종료 판단
+- `summarize_guidelines` (severity: medium) - 가이드라인 요약
+- `rag_to_guidelines` (severity: high) - RAG 가이드라인 생성
+- `reflect_patient_state` (severity: low) - 환자 상태 리플렉션
 
 ### 조건부 분기 (7개)
 
@@ -83,7 +88,7 @@ LLM을 사용하는 노드: `extract_clinical`, `detect_closure`, `summarize_gui
 | has_diag | 진단 존재 여부 | → 스레드관리 or 종료 |
 | is_existing | 기존 스레드 여부 | → 로드 or 생성 |
 | detect_closure | 치료 완료 여부 | → 닫기 or 계속 |
-| has_guideline | 의사 가이드라인 여부 | → 요약 or Tavily |
+| has_guideline | 의사 가이드라인 여부 | → 요약 or RAG |
 | should_reflect | 반성 트리거 | → Reflection or 스킵 |
 | plan_next_actions | 3가지 경로 | → HITL / 알람 / 종료 |
 | hitl_alarm_opt_in | 환자 동의 여부 | → 알람생성 or 종료 |
@@ -97,14 +102,65 @@ LLM을 사용하는 노드: `extract_clinical`, `detect_closure`, `summarize_gui
 | 개인정보 비식별화 | 완료 | 정규식 기반 마스킹 |
 | Memory & Reflection | 완료 | 3회마다 환자 상태 요약 |
 | HITL 알람 동의 | 완료 | 환자 동의 후 알람 생성 |
-| 스레드 종료 감지 | 완료 | LLM 판단 |
-| RAG 프로토타입 | 완료 | notebooks/practice_rag.ipynb (별도 동작) |
+| 스레드 종료 감지 | 완료 | LLM 판단 (에러 핸들링 포함) |
+| RAG 통합 | 완료 | nodes/rag.py (ChromaDB + medical_2.csv) |
+| **에러 핸들링** | **완료** | **LLM 노드 5개 전체 적용** |
 | STT (Whisper/Daglo) | 미구현 | 텍스트 입력으로 대체 |
-| RAG 통합 | 미구현 | 노트북에서만 별도 동작 |
 | 환자용 DB (PostgreSQL) | 미구현 | In-memory dict 사용 |
 | 임상 기록 문서화 | 미구현 | 의료진 공유용 보고서 |
 | 환자 Q&A | 미구현 | |
 | 체크리스트 추적 | 미구현 | 알람 계획 생성만 가능 |
+
+## 에러 핸들링
+
+### 개요
+
+LLM 호출 실패 시에도 워크플로우가 중단되지 않도록 안전장치 구현.
+
+### 핵심 메커니즘
+
+**safe_llm_invoke() 래퍼 함수** (stores.py)
+- LLM 호출 실패 시 fallback 값 자동 반환
+- 에러 정보 자동 생성 (노드명, 타임스탬프, 에러 타입, 심각도)
+- 로깅 자동 기록
+
+**State 에러 추적 필드** (state.py)
+```python
+errors: List[Dict[str, Any]]  # 노드별 에러 누적
+warnings: List[str]            # 사용자 경고 메시지
+```
+
+### 에러 심각도 (Severity)
+
+| Level | 적용 노드 | 동작 | 사용자 알림 |
+|:--|:--|:--|:--|
+| **high** | extract_clinical, rag_to_guidelines | 의료 정보 관련 | ⚠️ 명시적 경고 |
+| **medium** | detect_closure, summarize_guidelines | 보조 기능 | ℹ️ 안내 메시지 |
+| **low** | reflect_patient_state | 선택 기능 | 에러만 기록 |
+
+### 최종 응답 구조 (finalize.py)
+
+```python
+final_answer = {
+    # ... 기존 필드 ...
+    "has_errors": bool,
+    "has_critical_errors": bool,  # severity=high 여부
+    "errors": [...],               # 전체 에러 리스트
+    "warnings": [...],             # 경고 메시지
+    "data_completeness": "complete" | "incomplete",
+    "user_message": "⚠️ 일부 의료 정보 처리 실패..."
+}
+```
+
+### 보수적 기본값
+
+| 노드 | 실패 시 동작 |
+|:--|:--|
+| extract_clinical | 빈 진단/가이드라인 반환 |
+| detect_closure | should_close=false (치료 계속) |
+| summarize_guidelines | "의사 선생님의 조언을 확인하세요." |
+| rag_to_guidelines | 빈 가이드라인 배열 반환 |
+| reflect_patient_state | "{진단명} 관련 진료를 받았습니다." |
 
 ## 환경 변수 및 실행
 
