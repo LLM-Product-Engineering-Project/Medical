@@ -1,5 +1,6 @@
 """의료 RAG 검색 노드 — 신뢰할 수 있는 의료 지식 베이스 기반 검색"""
 
+import os
 import pandas as pd
 
 from langchain_upstage import UpstageEmbeddings
@@ -8,11 +9,28 @@ from langchain_community.vectorstores import Chroma
 from medical_workflow.state import WFState
 
 
-def build_medical_vector_db(file_path: str):
+def build_medical_vector_db(file_path: str, persist_dir: str | None = None):
     """
     의료 CSV(병명, 생활가이드, 식이요법/생활가이드)로 Chroma 벡터 DB 구축.
-    practice_rag.ipynb 로직을 모듈화한 함수.
+
+    - persist_dir가 존재하고 DB가 이미 있으면 → 즉시 로드
+    - 없으면 CSV 기반으로 생성 후 디스크에 저장
     """
+
+    embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
+
+    # ✅ 1. Persisted DB가 존재하면 바로 로드
+    if persist_dir and os.path.exists(persist_dir) and os.listdir(persist_dir):
+        print(f"[VectorDB] 기존 DB 로드: {persist_dir}")
+        return Chroma(
+            collection_name="medical_info",
+            embedding_function=embeddings,
+            persist_directory=persist_dir,
+        )
+
+    # ✅ 2. 없으면 CSV 읽어서 새로 생성
+    print("[VectorDB] CSV 기반으로 새 DB 생성 중...")
+
     encodings = ["utf-8-sig", "utf-8", "cp949", "euc-kr"]
     df = None
     for enc in encodings:
@@ -29,16 +47,24 @@ def build_medical_vector_db(file_path: str):
     df["생활가이드"] = df["생활가이드"].fillna("")
     df["식이요법/생활가이드"] = df["식이요법/생활가이드"].fillna("")
     df["combined_text"] = df.apply(
-        lambda row: f"질환명: {row['병명']}\n[생활가이드]\n{row['생활가이드']}\n[식이요법]\n{row['식이요법/생활가이드']}",
+        lambda row: f"질환명: {row['병명']}\n"
+        f"[생활가이드]\n{row['생활가이드']}\n"
+        f"[식이요법]\n{row['식이요법/생활가이드']}",
         axis=1,
     )
 
-    embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
     vector_db = Chroma.from_texts(
         texts=df["combined_text"].tolist(),
         embedding=embeddings,
         collection_name="medical_info",
+        persist_directory=persist_dir,  # 🔥 핵심 추가
     )
+
+    # 명시적 persist (안전)
+    if persist_dir:
+        vector_db.persist()
+        print(f"[VectorDB] DB 저장 완료: {persist_dir}")
+
     return vector_db
 
 
@@ -62,5 +88,7 @@ def n_rag_search(s: WFState, retriever) -> WFState:
     if not docs:
         return {**s, "rag_raw": "해당 질환에 대한 신뢰 가능한 가이드가 없습니다."}
 
-    raw_text = "\n\n---\n\n".join(getattr(d, "page_content", str(d)) for d in docs)
+    raw_text = "\n\n---\n\n".join(
+        getattr(d, "page_content", str(d)) for d in docs
+    )
     return {**s, "rag_raw": raw_text}
