@@ -41,6 +41,7 @@ class WFState(TypedDict, total=False):
 
     # safety
     safe_guidelines: Optional[List[Dict[str, Any]]]
+    safety_checked: bool  # guardrail 이미 처리됨 (idempotency guard)
 
     # guardrail (score 기반)
     guardrail_risk_score:     Optional[float]                # 0.0–1.0 위험도 가중합

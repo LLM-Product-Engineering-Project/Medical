@@ -37,7 +37,10 @@ def n_load_thread(s: WFState, llm) -> WFState:
     key = thread_key(s["patient_id"], s["diagnosis_key"])
     t = THREAD_STORE[key]
     _ensure_thread_defaults(t)
-    return {**s, "thread_id": t["thread_id"], "thread": t, "alarm_opt_in": t.get("alarm_opt_in")}
+    # state에 명시적인 값(True/False)이 있으면 유지, 없으면 thread 캐시 사용
+    state_opt = s.get("alarm_opt_in")
+    alarm_opt_in = state_opt if state_opt in (True, False) else t.get("alarm_opt_in")
+    return {**s, "thread_id": t["thread_id"], "thread": t, "alarm_opt_in": alarm_opt_in}
 
 
 def n_detect_closure(s: WFState, llm) -> WFState:

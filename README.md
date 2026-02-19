@@ -45,9 +45,10 @@ Medical/
 ├── Recording_20240102.txt
 ├── main.py                         # 엔트리포인트 (thin wrapper)
 ├── data/
-│   └── medical_2.csv               # 서울대병원 의학정보
+│   ├── medical_2.csv               # 서울대병원 의학정보
+│   └── testcase(50).xlsx           # 테스트 케이스 (환자별 케이스)
 └── src/medical_workflow/           # 핵심 로직
-    ├── runner.py                   # 멀티 파일 러너
+    ├── runner.py                   # run_many(), run_from_xlsx(), main()
     ├── graph.py                    # LangGraph 워크플로우
     ├── state.py                    # 상태 정의
     ├── config.py                   # 환경 변수 로드
@@ -73,18 +74,22 @@ Medical/
 ```
 
 ```bash
-# 방법 1: uv로 직접 실행 (권장)
+# ── txt 모드: data/recordings/ 디렉토리의 Recording_*.txt 파일 처리 ──
 uv run python main.py
 
-# 방법 2: 가상환경 활성화 후 실행
-# macOS/Linux
-source .venv/bin/activate
+# ── xlsx 모드: testcase(50).xlsx에서 특정 환자 케이스 처리 ──
+uv run python main.py p01          # p01 환자의 모든 케이스 처리
+uv run python main.py p12          # p12 환자의 케이스 처리
 
+# ── 옵션 ──
+uv run python main.py --reset_stores           # 스토어 초기화 후 실행 (txt 모드)
+uv run python main.py p01 --reset_stores       # 스토어 초기화 후 xlsx 모드
+uv run python main.py --xlsx data/testcase(50).xlsx p01  # xlsx 경로 직접 지정
+
+# 가상환경 활성화 후 실행 (대안)
 # Windows
 .venv\Scripts\activate
-
-# 이후 실행
-python main.py
+python main.py p01
 ```
 
 ## 주요 기능
@@ -132,6 +137,14 @@ run_many("/path/to/recordings", default_patient_id="patient_123")
 run_many("/path/to/recordings", reset_stores=True)
 ```
 
+```python
+from medical_workflow.runner import run_from_xlsx
+
+# xlsx 모드: 특정 환자 케이스 처리
+run_from_xlsx("p01", xlsx_path="data/testcase(50).xlsx")
+run_from_xlsx("p01", xlsx_path="data/testcase(50).xlsx", reset_stores=True)
+```
+
 ## 문제 해결
 
 | 증상 | 원인 | 해결 |
@@ -168,3 +181,25 @@ run_many("/path/to/recordings", reset_stores=True)
    - ❌ `requirements.txt`, `requirements-dev.txt` (중복 제거)
    - ❌ `.python-version` (pyproject.toml로 통일)
    - ❌ `notebooks/` (docs/archived/로 이동)
+
+**Phase 4: 버그 수정 및 안정화 (2026-02)**
+
+5. **주요 버그 수정**
+
+   | 버그 | 파일 | 수정 내용 |
+   |:--|:--|:--|
+   | JSON 유효성 검사 오판 | `utils/llm.py` | `{"should_close": false}` 등 falsy 값을 빈 응답으로 오인 → `not any(parsed.values())` 조건 제거 |
+   | alarm_opt_in 덮어쓰기 | `nodes/thread.py` | `n_load_thread`가 state의 `alarm_opt_in=True`를 THREAD_STORE의 `None`으로 덮어쓰는 문제 수정 |
+   | 이벤트/메모리 중복 적재 | `nodes/finalize.py` | 2차 `graph.invoke` 시 동일 visit_id 이벤트·메모리 중복 저장 방지 |
+   | VISIT_STORE 중복 기록 | `nodes/alarm.py` | `upsert_visit_record` 이중 호출 제거 |
+   | 그래프 중복 엣지 | `graph.py` | `add_edge("finalize", END)` 중복 등록 제거 |
+   | patient_id 하드코딩 | `nodes/input.py` | `"p1"` 고정값 → 미설정 시에만 기본값 적용 |
+
+6. **Safety Guardrail idempotency**
+   - `state.py`에 `safety_checked: bool` 필드 추가
+   - 2차 `graph.invoke` 재진입 시 `safety_guardrail` 중복 실행 방지
+   - `decision_log` 항상 4개만 기록 (누적 없음)
+
+7. **xlsx 입력 모드 추가**
+   - `runner.py`에 `run_from_xlsx()` 함수 추가
+   - `uv run python main.py {patient_id}` 형식으로 testcase xlsx 처리

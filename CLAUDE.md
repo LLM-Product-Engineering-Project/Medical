@@ -6,7 +6,7 @@
 진료 녹음 텍스트를 입력받아 임상 정보를 추출하고, 질병별 스레드로 누적 관리하며, 생활습관 알람을 생성한다.
 
 ⚠️ 중요 변경 사항
-본 시스템은 이제 “Safety Guardrail 4단 구조”를 명시적으로 워크플로우에 통합한다.
+본 시스템은 이제 "Safety Guardrail 4단 구조"를 명시적으로 워크플로우에 통합한다.
 안전성 판단은 단일 노드(safety_guardrail)에서 수행되며,
 해당 노드는 Risk Filter → Context Check → Source Check → Policy Routing을 내부적으로 수행한다.
 
@@ -16,11 +16,19 @@
 main.py                              # 엔트리포인트 (thin wrapper)
 src/medical_workflow/
 ├── __init__.py
-├── config.py                        # 환경 변수, LLM/Tavily 초기화
+├── config.py                        # 환경 변수 로드
 ├── state.py                         # WFState TypedDict
-├── stores.py                        # THREAD_STORE, VISIT_STORE, 헬퍼
+├── stores.py                        # 하위 호환성 래퍼
+├── guardrail_policy.py              # Safety Guardrail 정책 테이블
 ├── graph.py                         # build_graph()
-├── runner.py                        # run_many(), main()
+├── runner.py                        # run_many(), run_from_xlsx(), main()
+├── utils/                           # 유틸리티 패키지
+│   ├── llm.py                       # safe_llm_invoke
+│   ├── parsing.py                   # parse_json_safely
+│   └── helpers.py                   # thread_key, now_iso
+├── stores/                          # 저장소 패키지
+│   ├── thread.py                    # THREAD_STORE 관리
+│   └── visit.py                     # VISIT_STORE 관리
 └── nodes/
     ├── __init__.py
     ├── input.py                     # 메타 파싱, 개인정보 비식별화
@@ -33,9 +41,9 @@ src/medical_workflow/
     ├── alarm.py                     # 알람 계획 생성
     └── finalize.py                  # 메모리/이벤트 저장, 최종 응답
 data/medical_2.csv                   # 서울대병원 의학정보 (병명, 생활가이드, 식이요법)
-notebooks/practice_rag.ipynb         # ChromaDB RAG 프로토타입 (main.py와 별도 동작)
-tests/                               # 테스트 (향후 추가)
-docs/                                # 기획서, 멘토링 리뷰, 아키텍처 다이어그램
+data/testcase(50).xlsx               # 테스트 케이스 50건 (patient, diagnosis, interview)
+tests/                               # 노드 단위 테스트 및 성능 측정
+docs/                                # 기획서, 멘토링 리뷰, LLM 기능 공백 목록
 ```
 
 ## 기술 스택
@@ -56,7 +64,7 @@ docs/                                # 기획서, 멘토링 리뷰, 아키텍처
 ### 파이프라인 흐름
 
 ```
-Recording_*.txt 입력
+Recording_*.txt 또는 testcase(50).xlsx 입력 (uv run python main.py [patient_id])
   → 메타 파싱 (날짜, 환자ID)
   → 개인정보 비식별화 (이메일/전화/주민번호/주소 마스킹)
   → LLM 임상 정보 추출 (진단명, 가이드라인) [에러 핸들링]
@@ -79,12 +87,13 @@ Recording_*.txt 입력
 
 ### 노드 (23개 그래프 노드)
 
-LLM을 사용하는 노드 (5개, 모두 에러 핸들링 적용):
+LLM을 사용하는 노드 (6개, 모두 에러 핸들링 적용):
 - `extract_clinical` (severity: high) - 임상 정보 추출
 - `detect_closure` (severity: medium) - 치료 종료 판단
 - `summarize_guidelines` (severity: medium) - 가이드라인 요약
 - `rag_to_guidelines` (severity: high) - RAG 가이드라인 생성
 - `reflect_patient_state` (severity: low) - 환자 상태 리플렉션
+- `safety_guardrail` (severity: medium) - 위험·충돌 탐지 (Risk Filter + Context Check)
 
 # 🛡 Safety Guardrail 설계
 
@@ -92,10 +101,10 @@ LLM을 사용하는 노드 (5개, 모두 에러 핸들링 적용):
 
 Safety Guardrail은 다음 4단계로 구성된다.
 
-1. Risk Filter  
-2. Context Check  
-3. Source Check  
-4. Policy Routing  
+1. Risk Filter
+2. Context Check
+3. Source Check
+4. Policy Routing
 
 이 네 단계는 단일 노드 `safety_guardrail` 내부에서 순차적으로 실행된다.
 
@@ -119,13 +128,13 @@ Guardrail은 가이드라인 생성 이후, Reflection 및 Planning 이전에 �
 ### 상태 값
 
 ```python
-state.guardrail_risk = "low" | "medium" | "high"
+state.guardrail_risk_score: float  # 0.0–1.0 위험도 가중합
 ```
 
 ### 정책
-- risk = high → 즉시 `block`
-- risk = medium → 다음 단계 진행
-- risk = low → 다음 단계 진행
+- risk_score >= 0.7 → 즉시 `block`
+- risk_score >= 0.4 → 다음 단계 진행 (hitl 후보)
+- risk_score < 0.4 → 다음 단계 진행
 
 ---
 
@@ -142,13 +151,12 @@ state.guardrail_risk = "low" | "medium" | "high"
 ### 상태 값
 
 ```python
-state.guardrail_conflict = "none" | "possible" | "high"
+state.guardrail_conflict_score: float  # 0.0–1.0 충돌 심각도 최댓값
 ```
 
 ### 정책
-- conflict = high → `hitl`
-- conflict = possible → 다음 단계 진행
-- conflict = none → 다음 단계 진행
+- conflict_score >= 0.6 → `hitl`
+- conflict_score < 0.6 → 다음 단계 진행
 
 ---
 
@@ -166,13 +174,12 @@ state.guardrail_conflict = "none" | "possible" | "high"
 ### 상태 값
 
 ```python
-state.guardrail_evidence = "strong" | "weak" | "none"
+state.guardrail_evidence_score: float  # evidence_items retriever_score 평균
 ```
 
 ### 정책
-- evidence = none → `caution`
-- evidence = weak → `caution`
-- evidence = strong → 다음 단계 진행
+- evidence_score < 0.3 → `caution`
+- evidence_score >= 0.3 → 다음 단계 진행
 
 ---
 
@@ -188,10 +195,25 @@ state.guardrail_route = "allow" | "caution" | "hitl" | "block"
 
 | 조건 | 결과 |
 |------|------|
-| risk = high | block |
-| conflict = high | hitl |
-| evidence = none | caution |
+| risk_score >= 0.7 | block |
+| conflict_score >= 0.6 또는 risk_score >= 0.4 | hitl |
+| evidence_score < 0.3 | caution |
 | 그 외 | allow |
+
+---
+
+## State 값 (실제 구현)
+
+```python
+state.guardrail_risk_score:     float  # 0.0–1.0 위험도 가중합
+state.guardrail_conflict_score: float  # 0.0–1.0 충돌 심각도 최댓값
+state.guardrail_evidence_score: float  # evidence_items retriever_score 평균
+state.guardrail_route:          "allow" | "caution" | "hitl" | "block"
+state.guardrail_decision_log:   List[Dict]  # 4단계 판단 로그
+state.safety_checked:           bool   # idempotency guard (2차 호출 중복 실행 방지)
+```
+
+> **Idempotency**: `safety_checked=True`이면 2차 `graph.invoke` 재진입 시 노드를 스킵하고 기존 결과를 그대로 반환한다. `decision_log`는 항상 해당 실행분 4개만 기록한다 (이전 state 값 이어받지 않음).
 
 ---
 
@@ -221,13 +243,15 @@ state.guardrail_route = "allow" | "caution" | "hitl" | "block"
 | 항목 | 상태 | 비고 |
 |:--|:--|:--|
 | 진료 기록 자동화 | 완료 | src/medical_workflow/ |
-| 생활습관 알람 | 완료 | nodes/alarm.py |
+| 생활습관 알람 | 완료 | nodes/alarm.py (카테고리별 규칙 기반) |
 | 개인정보 비식별화 | 완료 | 정규식 기반 마스킹 |
 | Memory & Reflection | 완료 | 3회마다 환자 상태 요약 |
 | HITL 알람 동의 | 완료 | 환자 동의 후 알람 생성 |
 | 스레드 종료 감지 | 완료 | LLM 판단 (에러 핸들링 포함) |
 | RAG 통합 | 완료 | nodes/rag.py (ChromaDB + medical_2.csv) |
-| **에러 핸들링** | **완료** | **LLM 노드 5개 전체 적용** |
+| 에러 핸들링 | 완료 | LLM 노드 전체 적용 (safe_llm_invoke) |
+| Safety Guardrail | 완료 | 4단계 score 기반, idempotency 포함 |
+| xlsx 입력 모드 | 완료 | uv run python main.py {patient_id} |
 | STT (Whisper/Daglo) | 미구현 | 텍스트 입력으로 대체 |
 | 환자용 DB (PostgreSQL) | 미구현 | In-memory dict 사용 |
 | 임상 기록 문서화 | 미구현 | 의료진 공유용 보고서 |
@@ -242,7 +266,7 @@ LLM 호출 실패 시에도 워크플로우가 중단되지 않도록 안전장�
 
 ### 핵심 메커니즘
 
-**safe_llm_invoke() 래퍼 함수** (stores.py)
+**safe_llm_invoke() 래퍼 함수** (utils/llm.py)
 - LLM 호출 실패 시 fallback 값 자동 반환
 - 에러 정보 자동 생성 (노드명, 타임스탬프, 에러 타입, 심각도)
 - 로깅 자동 기록
@@ -258,7 +282,7 @@ warnings: List[str]            # 사용자 경고 메시지
 | Level | 적용 노드 | 동작 | 사용자 알림 |
 |:--|:--|:--|:--|
 | **high** | extract_clinical, rag_to_guidelines | 의료 정보 관련 | ⚠️ 명시적 경고 |
-| **medium** | detect_closure, summarize_guidelines | 보조 기능 | ℹ️ 안내 메시지 |
+| **medium** | detect_closure, summarize_guidelines, safety_guardrail | 보조 기능 | ℹ️ 안내 메시지 |
 | **low** | reflect_patient_state | 선택 기능 | 에러만 기록 |
 
 ### 최종 응답 구조 (finalize.py)
@@ -284,6 +308,7 @@ final_answer = {
 | summarize_guidelines | "의사 선생님의 조언을 확인하세요." |
 | rag_to_guidelines | 빈 가이드라인 배열 반환 |
 | reflect_patient_state | "{진단명} 관련 진료를 받았습니다." |
+| safety_guardrail | LLM 실패 시 detected=[] 반환, risk/conflict score=0.0으로 처리 |
 
 ## 환경 변수 및 실행
 

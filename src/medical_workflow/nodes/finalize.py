@@ -22,9 +22,17 @@ def _append_memory_and_event(s: WFState) -> None:
 
     _ensure_thread_defaults(thread)
 
+    # 동일 visit_id 이벤트/메모리 중복 적재 방지 (2차 호출 시 재진입 방지)
+    visit_id = s.get("visit_id")
+    if any(ev.get("visit_id") == visit_id for ev in thread["events"]):
+        # 이미 적재된 경우 alarm_opt_in 동기화만 수행
+        if thread.get("alarm_opt_in") not in (True, False) and s.get("alarm_opt_in") in (True, False):
+            thread["alarm_opt_in"] = s["alarm_opt_in"]
+        return
+
     thread["events"].append(
         {
-            "visit_id": s.get("visit_id"),
+            "visit_id": visit_id,
             "visit_date": s.get("visit_date"),
             "guidelines": s.get("safe_guidelines", []),
             "should_close": s.get("should_close", False),
@@ -53,6 +61,7 @@ def _append_memory_and_event(s: WFState) -> None:
             }
         )
 
+    # alarm_opt_in 동기화 (미설정 시에만)
     if thread.get("alarm_opt_in") not in (True, False) and s.get("alarm_opt_in") in (True, False):
         thread["alarm_opt_in"] = s["alarm_opt_in"]
 

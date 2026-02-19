@@ -131,7 +131,6 @@ def build_graph(llm: ChatOpenAI, retriever):
 
     # 종료 시 바로 finalize
     g.add_edge("close_thread", "finalize")
-    g.add_edge("finalize", END)
 
     # ---------------------------
     # 6️⃣ 가이드라인 확보

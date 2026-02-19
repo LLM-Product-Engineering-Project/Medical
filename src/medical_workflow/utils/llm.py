@@ -44,8 +44,9 @@ def safe_llm_invoke(
 
         if parse_json:
             parsed = parse_json_safely(content)
-            # 빈 JSON 응답 체크
-            if not parsed or (isinstance(parsed, dict) and not any(parsed.values())):
+            # 빈 JSON 응답 체크 (dict/list 자체가 비어있는 경우만 차단)
+            # NOTE: {"should_close": false}, {"detected": []} 같은 falsy 값은 유효한 응답
+            if not parsed:
                 raise ValueError("LLM returned empty or invalid JSON")
             return parsed, None
 

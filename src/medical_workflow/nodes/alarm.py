@@ -3,7 +3,7 @@
 from typing import Dict, Any, List
 
 from medical_workflow.state import WFState
-from medical_workflow.stores import THREAD_STORE, thread_key, upsert_visit_record
+from medical_workflow.stores import THREAD_STORE, thread_key
 
 
 def n_build_alarm_plan(s: WFState, llm) -> WFState:
@@ -43,5 +43,4 @@ def n_build_alarm_plan(s: WFState, llm) -> WFState:
             "items": plan_items[:12],
         },
     }
-    upsert_visit_record(s2)
     return s2

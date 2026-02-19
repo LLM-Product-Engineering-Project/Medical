@@ -36,7 +36,14 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
     2. Context Check  — LLM이 reason_code+severity 구조로 충돌 탐지 → conflict_score
     3. Source Check   — 규칙 기반으로 evidence_items 생성 → evidence_score
     4. Policy Routing — ROUTING_POLICY 테이블로 최종 route 결정 + decision_log 누적
+
+    Idempotency: safety_checked=True이면 이미 처리된 run이므로 즉시 반환.
     """
+    # ── Idempotency guard ─────────────────────────────────────────────────
+    # 2차 graph.invoke(state2)에서 그래프가 재실행될 때 safety_guardrail이
+    # 중복 호출되어 decision_log가 누적되는 것을 방지한다.
+    if s.get("safety_checked"):
+        return s
     from medical_workflow.guardrail_policy import (
         RISK_WEIGHTS, ROUTING_POLICY, RAG_DEFAULT_RETRIEVER_SCORE,
         REASON_RISK_CLEAR,
@@ -55,7 +62,8 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
 
     errors = list(s.get("errors", []))
     warnings = list(s.get("warnings", []))
-    decision_log: list[dict] = list(s.get("guardrail_decision_log") or [])
+    # decision_log는 항상 이번 실행분만 기록 (이전 state 값 이어받지 않음)
+    decision_log: list[dict] = []
 
     # ── Stage 1: Risk Filter ──────────────────────────────────────────────
     risk_prompt = (
@@ -256,6 +264,7 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
 
     return {
         **s,
+        "safety_checked":           True,
         "safe_guidelines":          safe_guidelines,
         "guardrail_risk_score":     risk_score,
         "guardrail_conflict_score": conflict_score,

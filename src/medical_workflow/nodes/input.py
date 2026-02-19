@@ -12,7 +12,8 @@ def n_parse_input_meta(s: WFState) -> WFState:
         ymd = m.group(1)
         s = {**s, "visit_date": f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"}
 
-    s = {**s, "patient_id": "p1"}  # 단일 환자 가정
+    if not s.get("patient_id"):
+        s = {**s, "patient_id": "p1"}
     return s
 
 
