@@ -43,7 +43,13 @@ def run_many(input_dir: str, default_patient_id: str = "p1", reset_stores: bool 
 
     # 여기가 멈추는지 확인하고 싶으면 이 2줄을 남겨둬도 됨
     print("[STEP] building vector db...", flush=True)
-    vector_db = build_medical_vector_db(data_path)
+    persist_path = os.path.join(project_root, "data", "chroma_db")
+
+    vector_db = build_medical_vector_db(
+        file_path=data_path,
+        persist_dir=persist_path,
+    )
+    
     print("[STEP] vector db ready", flush=True)
 
     retriever = vector_db.as_retriever(search_kwargs={"k": 3})

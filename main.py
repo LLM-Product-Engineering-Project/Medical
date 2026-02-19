@@ -9,9 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from dotenv import load_dotenv
 load_dotenv()
 
-print("UPSTAGE_API_KEY loaded:", bool(os.getenv("UPSTAGE_API_KEY")))
-print("UPSTAGE_API_KEY head:", (os.getenv("UPSTAGE_API_KEY") or "")[:6])
-
 from medical_workflow.runner import main
 
 if __name__ == "__main__":
