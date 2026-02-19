@@ -8,7 +8,7 @@ from medical_workflow.nodes.input import n_parse_input_meta, n_deidentify_redact
 from medical_workflow.nodes.extraction import n_extract_doctor, n_extract_clinical, n_has_diagnosis
 from medical_workflow.nodes.thread import n_is_existing, n_create_thread, n_load_thread, n_detect_closure, n_close_thread
 from medical_workflow.nodes.memory import n_retrieve_memories, n_should_reflect, n_reflect_patient_state
-from medical_workflow.nodes.guidelines import n_has_guideline, n_summarize_guidelines, n_safety_check
+from medical_workflow.nodes.guidelines import n_has_guideline, n_summarize_guidelines, n_safety_guardrail
 from medical_workflow.nodes.search import n_rag_query_sanitize, n_rag_to_guidelines
 from medical_workflow.nodes.rag import n_rag_search
 from medical_workflow.nodes.planning import n_plan_next_actions, n_hitl_alarm_opt_in
@@ -62,8 +62,8 @@ def build_graph(llm: ChatOpenAI, retriever):
     g.add_node("rag_search", lambda s: n_rag_search(s, retriever))
     g.add_node("rag_to_guidelines", lambda s: n_rag_to_guidelines(s, llm))
 
-    # 안전성 검증
-    g.add_node("safety_check", lambda s: n_safety_check(s, llm))
+    # 안전성 검증 (4단 Guardrail)
+    g.add_node("safety_guardrail", lambda s: n_safety_guardrail(s, llm))
 
     # 환자 상태 반영
     g.add_node("should_reflect", n_should_reflect)
@@ -146,18 +146,30 @@ def build_graph(llm: ChatOpenAI, retriever):
     )
 
     # 요약 → 안전성 검사
-    g.add_edge("summarize_guidelines", "safety_check")
+    g.add_edge("summarize_guidelines", "safety_guardrail")
 
     # 검색 → 가이드라인 변환 → 안전성 검사
     g.add_edge("rag_query_sanitize", "rag_search")
     g.add_edge("rag_search", "rag_to_guidelines")
-    g.add_edge("rag_to_guidelines", "safety_check")
+    g.add_edge("rag_to_guidelines", "safety_guardrail")
 
     # ---------------------------
-    # 7️⃣ 안전성 이후 환자 상태 반영 여부
+    # 7️⃣ Guardrail 라우팅
     # ---------------------------
 
-    g.add_edge("safety_check", "should_reflect")
+    # allow / caution → 정상 흐름
+    # hitl             → 충돌 검토 (기존 HITL 노드 재활용)
+    # block            → 즉시 종료 (의료진 상담 안내)
+    g.add_conditional_edges(
+        "safety_guardrail",
+        lambda s: s.get("guardrail_route", "allow"),
+        {
+            "allow":   "should_reflect",
+            "caution": "should_reflect",
+            "hitl":    "hitl_alarm_opt_in",
+            "block":   "finalize",
+        },
+    )
 
     g.add_conditional_edges(
         "should_reflect",

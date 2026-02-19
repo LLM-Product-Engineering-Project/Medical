@@ -42,6 +42,14 @@ class WFState(TypedDict, total=False):
     # safety
     safe_guidelines: Optional[List[Dict[str, Any]]]
 
+    # guardrail (score 기반)
+    guardrail_risk_score:     Optional[float]                # 0.0–1.0 위험도 가중합
+    guardrail_conflict_score: Optional[float]                # 0.0–1.0 충돌 심각도 최댓값
+    guardrail_evidence_items: Optional[List[Dict[str, Any]]] # {span, memory_id, source, retriever_score, reason_code}
+    guardrail_evidence_score: Optional[float]                # evidence_items retriever_score 평균
+    guardrail_route:          Optional[Literal["allow", "caution", "hitl", "block"]]
+    guardrail_decision_log:   Optional[List[Dict[str, Any]]] # 단계별 판단 로그 (재현 가능)
+
     # closure
     should_close: bool
 

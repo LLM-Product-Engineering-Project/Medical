@@ -105,11 +105,23 @@ def n_finalize(s: WFState, llm) -> WFState:
         "warnings": warnings if warnings else None,
 
         # 의료 정보 신뢰성 플래그
-        "data_completeness": "incomplete" if critical_errors else "complete"
+        "data_completeness": "incomplete" if critical_errors else "complete",
+
+        # guardrail 결과 (score 기반)
+        "guardrail_route":          s.get("guardrail_route"),
+        "guardrail_risk_score":     s.get("guardrail_risk_score"),
+        "guardrail_conflict_score": s.get("guardrail_conflict_score"),
+        "guardrail_evidence_score": s.get("guardrail_evidence_score"),
+        "guardrail_decision_log":   s.get("guardrail_decision_log"),
     }
 
-    # 치명적 에러가 있으면 사용자에게 명확히 알림
-    if critical_errors:
+    # block 라우트: 가이드라인 대신 상담 안내 메시지 출력
+    if s.get("guardrail_route") == "block":
+        final_answer["user_message"] = (
+            "🚫 안전 검증에서 위험한 내용이 감지되어 가이드라인을 제공할 수 없습니다. "
+            "반드시 담당 의료진과 직접 상담하시기 바랍니다."
+        )
+    elif critical_errors:
         final_answer["user_message"] = (
             "⚠️ 일부 의료 정보 처리에 실패했습니다. "
             "정확한 정보는 의료진과 직접 상담하시기 바랍니다."

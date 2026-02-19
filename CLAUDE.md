@@ -5,6 +5,11 @@
 환자의 헬스 리터러시 향상을 위한 Agent 기반 진료 관리 서비스.
 진료 녹음 텍스트를 입력받아 임상 정보를 추출하고, 질병별 스레드로 누적 관리하며, 생활습관 알람을 생성한다.
 
+⚠️ 중요 변경 사항
+본 시스템은 이제 “Safety Guardrail 4단 구조”를 명시적으로 워크플로우에 통합한다.
+안전성 판단은 단일 노드(safety_guardrail)에서 수행되며,
+해당 노드는 Risk Filter → Context Check → Source Check → Policy Routing을 내부적으로 수행한다.
+
 ## 프로젝트 구조
 
 ```
@@ -80,6 +85,124 @@ LLM을 사용하는 노드 (5개, 모두 에러 핸들링 적용):
 - `summarize_guidelines` (severity: medium) - 가이드라인 요약
 - `rag_to_guidelines` (severity: high) - RAG 가이드라인 생성
 - `reflect_patient_state` (severity: low) - 환자 상태 리플렉션
+
+# 🛡 Safety Guardrail 설계
+
+## Guardrail 구조 (논리 계층)
+
+Safety Guardrail은 다음 4단계로 구성된다.
+
+1. Risk Filter  
+2. Context Check  
+3. Source Check  
+4. Policy Routing  
+
+이 네 단계는 단일 노드 `safety_guardrail` 내부에서 순차적으로 실행된다.
+
+Guardrail은 가이드라인 생성 이후, Reflection 및 Planning 이전에 반드시 통과해야 한다.
+
+---
+
+# 🔎 Safety Guardrail 상세 규칙
+
+## 1️⃣ Risk Filter
+
+### 목적
+명백히 위험한 의료 발화를 사전에 차단한다.
+
+### 차단 조건 예시
+- 약물 용량 변경 지시
+- 치료 중단 권고
+- 새로운 진단 단정
+- 응급 증상 무시 또는 축소
+
+### 상태 값
+
+```python
+state.guardrail_risk = "low" | "medium" | "high"
+```
+
+### 정책
+- risk = high → 즉시 `block`
+- risk = medium → 다음 단계 진행
+- risk = low → 다음 단계 진행
+
+---
+
+## 2️⃣ Context Check
+
+### 목적
+환자 맥락과 생성된 권고의 충돌 여부를 판단한다.
+
+### 입력
+- 환자 메모리 (기저질환, 최근 상태 등)
+- 현재 진단 정보
+- 생성된 가이드라인
+
+### 상태 값
+
+```python
+state.guardrail_conflict = "none" | "possible" | "high"
+```
+
+### 정책
+- conflict = high → `hitl`
+- conflict = possible → 다음 단계 진행
+- conflict = none → 다음 단계 진행
+
+---
+
+## 3️⃣ Source Check
+
+### 목적
+가이드라인의 근거 신뢰도를 평가한다.
+
+### 평가 기준
+- 진료기록 직접 발화 기반 → 신뢰도 높음
+- 내부 guideline DB 기반 → 중간 신뢰도
+- RAG 검색 기반 → evidence 존재 여부 확인
+- evidence 없는 강한 권고 → 신뢰도 낮음
+
+### 상태 값
+
+```python
+state.guardrail_evidence = "strong" | "weak" | "none"
+```
+
+### 정책
+- evidence = none → `caution`
+- evidence = weak → `caution`
+- evidence = strong → 다음 단계 진행
+
+---
+
+## 4️⃣ Policy Routing
+
+### 최종 라우트 값
+
+```python
+state.guardrail_route = "allow" | "caution" | "hitl" | "block"
+```
+
+### 라우팅 규칙
+
+| 조건 | 결과 |
+|------|------|
+| risk = high | block |
+| conflict = high | hitl |
+| evidence = none | caution |
+| 그 외 | allow |
+
+---
+
+# 🔐 설계 원칙
+
+- 안전 판단은 단일 노드에서 수행한다.
+- 강한 의료 권고는 반드시 근거 기반이어야 한다.
+- 근거 없는 권고는 강도를 낮춘다.
+- 알람 생성은 `allow` 또는 `caution`일 때만 가능하다.
+- `block` 상태에서는 의료진 상담 안내 메시지를 출력한다.
+
 
 ### 조건부 분기 (7개)
 
