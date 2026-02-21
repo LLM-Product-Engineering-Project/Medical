@@ -4,7 +4,7 @@ test_detect_closure.py
 치료 종료 감지 노드 (n_detect_closure) 단독 테스트
 
 실행 방법:
-    cd C:\Users\yebin\Desktop\Medical
+    cd C:/Users/yebin/Desktop/Medical
     python tests/test_detect_closure.py
 """
 

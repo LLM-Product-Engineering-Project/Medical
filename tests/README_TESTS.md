@@ -13,6 +13,9 @@
 | `test_summarize_guidelines.py` | n_summarize_guidelines | 의사 조언을 환자용 2문장 요약 | medium |
 | `test_rag_to_guidelines.py` | n_rag_to_guidelines | RAG 검색 결과를 가이드라인으로 변환 | high |
 | `test_reflect_patient_state.py` | n_reflect_patient_state | 누적 메모리를 바탕으로 환자 상태 요약 | low |
+| `test_rag_query_sanitize.py` | n_rag_query_sanitize | 진단명+진료 전사 기반 LLM 검색 쿼리 생성 | medium |
+| `test_build_alarm_plan.py` | n_build_alarm_plan | 환자 메모리 기반 LLM 맞춤 알람 일정 생성 | medium |
+| `test_finalize_user_message.py` | n_finalize (user_message) | guardrail·가이드라인 기반 LLM 안내 메시지 생성 | low |
 
 ### 통합 테스트
 
@@ -46,6 +49,9 @@ python tests/test_detect_closure.py
 python tests/test_summarize_guidelines.py
 python tests/test_rag_to_guidelines.py
 python tests/test_reflect_patient_state.py
+python tests/test_rag_query_sanitize.py
+python tests/test_build_alarm_plan.py
+python tests/test_finalize_user_message.py
 
 # RAG 통합 테스트 (시간 소요: 벡터 DB 구축)
 python tests/test_rag_integration.py

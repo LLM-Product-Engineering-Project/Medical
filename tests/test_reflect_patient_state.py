@@ -4,7 +4,7 @@ test_reflect_patient_state.py
 환자 상태 리플렉션 노드 (n_reflect_patient_state) 단독 테스트
 
 실행 방법:
-    cd C:\Users\yebin\Desktop\Medical
+    cd C:/Users/yebin/Desktop/Medical
     python tests/test_reflect_patient_state.py
 """
 

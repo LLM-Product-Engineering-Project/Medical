@@ -6,17 +6,22 @@ from medical_workflow.stores import (
     thread_key,
     now_iso,
     upsert_visit_record,
+    safe_llm_invoke,
 )
 from medical_workflow.nodes.thread import _ensure_thread_defaults
 
 
 def _append_memory_and_event(s: WFState) -> None:
     """Memory stream + event append를 finalize에서 한 번에 처리."""
-    if not s.get("has_diagnosis", False):
+    if s.get("has_diagnosis", False):
+        key = thread_key(s["patient_id"], s["diagnosis_key"])
+        thread = THREAD_STORE.get(key)
+    elif s.get("has_symptom", False):
+        # 증상 스레드: state에 저장된 thread 객체(THREAD_STORE 참조) 사용
+        thread = s.get("thread")
+    else:
         return
 
-    key = thread_key(s["patient_id"], s["diagnosis_key"])
-    thread = THREAD_STORE.get(key)
     if thread is None:
         return
 
@@ -74,19 +79,103 @@ def n_finalize(s: WFState, llm) -> WFState:
     critical_errors = [e for e in errors if e.get("severity") == "high"]
 
     if not s.get("has_diagnosis", False):
-        final_answer = {"type": "general_visit"}
+        if s.get("has_symptom", False):
+            # 증상 스레드 방문 — 진단 미확정이지만 의미 있는 결과 출력
+            _append_memory_and_event(s)
+            thread = s.get("thread") or {}
+            symptom_summary = s.get("symptom_summary") or "증상"
+            safe_guidelines = s.get("safe_guidelines") or []
+            guardrail_route = s.get("guardrail_route") or "allow"
 
-        # 진단 없는 경우에도 에러 정보 포함
-        if errors or warnings:
-            final_answer["has_errors"] = len(errors) > 0
-            final_answer["has_critical_errors"] = len(critical_errors) > 0
-            final_answer["errors"] = errors if errors else None
-            final_answer["warnings"] = warnings if warnings else None
-            final_answer["data_completeness"] = "incomplete" if critical_errors else "complete"
+            final_answer = {
+                "type": "symptom_thread_visit",
+                "patient_id": s["patient_id"],
+                "visit_id": s.get("visit_id"),
+                "visit_date": s.get("visit_date"),
+                "thread_id": s.get("thread_id"),
+                "symptom_keys": s.get("symptom_keys"),
+                "symptom_summary": symptom_summary,
+                "guidelines": safe_guidelines,
+                "alarm_opt_in": (thread.get("alarm_opt_in") if thread else s.get("alarm_opt_in")),
+                "alarm_plan": s.get("alarm_plan"),
+                "plan_action": s.get("plan_action"),
+                "has_errors": len(errors) > 0,
+                "has_critical_errors": len(critical_errors) > 0,
+                "errors": errors if errors else None,
+                "warnings": warnings if warnings else None,
+                "data_completeness": "incomplete" if critical_errors else "complete",
+                "guardrail_route":          guardrail_route,
+                "guardrail_risk_score":     s.get("guardrail_risk_score"),
+                "guardrail_conflict_score": s.get("guardrail_conflict_score"),
+                "guardrail_evidence_score": s.get("guardrail_evidence_score"),
+                "guardrail_decision_log":   s.get("guardrail_decision_log"),
+            }
 
-        s2 = {**s, "final_answer": final_answer}
-        upsert_visit_record(s2)
-        return s2
+            if guardrail_route == "block":
+                fallback_msg = (
+                    "안전 검증에서 위험한 내용이 감지되었습니다. "
+                    "반드시 담당 의료진과 직접 상담하시기 바랍니다."
+                )
+            elif critical_errors:
+                fallback_msg = (
+                    "일부 의료 정보 처리에 실패했습니다. "
+                    "정확한 정보는 의료진과 직접 상담하시기 바랍니다."
+                )
+            elif warnings:
+                fallback_msg = "\n".join(warnings)
+            else:
+                fallback_msg = (
+                    f"증상({symptom_summary})에 대한 안내를 확인하였습니다. "
+                    "아직 진단이 확정되지 않았으니 증상이 지속되면 의료진과 상담하세요."
+                )
+
+            guideline_texts = [g.get("text", "") for g in safe_guidelines if g.get("text")][:5]
+            warning_summary = "; ".join(warnings[:3]) if warnings else "없음"
+
+            prompt = f"""증상: {symptom_summary}
+주요 가이드라인 (최대 5개):
+{chr(10).join(f"- {t}" for t in guideline_texts) if guideline_texts else "없음"}
+안전 검증 결과: {guardrail_route}
+경고 사항: {warning_summary}
+
+위 내용을 바탕으로 환자가 이해하기 쉬운 2~3문장 안내 메시지를 작성하라.
+- 아직 진단이 확정되지 않은 상태임을 부드럽게 안내하라
+- 의료 용어를 최소화하고 쉬운 말로 설명하라
+- 메시지만 출력하라 (설명 없이).
+"""
+            llm_msg, error = safe_llm_invoke(
+                llm, prompt,
+                node_name="finalize_user_message",
+                fallback_value=fallback_msg,
+                parse_json=False,
+                severity="low"
+            )
+            user_message = (llm_msg or "").strip() or fallback_msg
+            final_answer["user_message"] = user_message
+
+            if error:
+                errors.append(error)
+                final_answer["errors"] = errors
+                final_answer["has_errors"] = True
+
+            s2 = {**s, "final_answer": final_answer, "errors": errors}
+            upsert_visit_record(s2)
+            return s2
+
+        else:
+            # 진단도 증상도 없는 순수 일반 방문
+            final_answer = {"type": "general_visit"}
+
+            if errors or warnings:
+                final_answer["has_errors"] = len(errors) > 0
+                final_answer["has_critical_errors"] = len(critical_errors) > 0
+                final_answer["errors"] = errors if errors else None
+                final_answer["warnings"] = warnings if warnings else None
+                final_answer["data_completeness"] = "incomplete" if critical_errors else "complete"
+
+            s2 = {**s, "final_answer": final_answer}
+            upsert_visit_record(s2)
+            return s2
 
     _append_memory_and_event(s)
 
@@ -124,20 +213,61 @@ def n_finalize(s: WFState, llm) -> WFState:
         "guardrail_decision_log":   s.get("guardrail_decision_log"),
     }
 
-    # block 라우트: 가이드라인 대신 상담 안내 메시지 출력
-    if s.get("guardrail_route") == "block":
-        final_answer["user_message"] = (
-            "🚫 안전 검증에서 위험한 내용이 감지되어 가이드라인을 제공할 수 없습니다. "
+    # user_message: LLM으로 환자 맞춤형 안내 메시지 생성
+    guardrail_route = s.get("guardrail_route") or "allow"
+    safe_guidelines = s.get("safe_guidelines") or []
+    diagnosis_key = s.get("diagnosis_key", "")
+
+    # block / critical error 상황별 fallback 메시지 (LLM 실패 시 사용)
+    if guardrail_route == "block":
+        fallback_msg = (
+            "안전 검증에서 위험한 내용이 감지되어 가이드라인을 제공할 수 없습니다. "
             "반드시 담당 의료진과 직접 상담하시기 바랍니다."
         )
     elif critical_errors:
-        final_answer["user_message"] = (
-            "⚠️ 일부 의료 정보 처리에 실패했습니다. "
+        fallback_msg = (
+            "일부 의료 정보 처리에 실패했습니다. "
             "정확한 정보는 의료진과 직접 상담하시기 바랍니다."
         )
     elif warnings:
-        final_answer["user_message"] = "\n".join(warnings)
+        fallback_msg = "\n".join(warnings)
+    else:
+        fallback_msg = f"{diagnosis_key} 관련 가이드라인을 확인하였습니다. 의료진의 지도에 따라 건강 관리를 이어가세요."
 
-    s2 = {**s, "final_answer": final_answer}
+    guideline_texts = [g.get("text", "") for g in safe_guidelines if g.get("text")][:5]
+    warning_summary = "; ".join(warnings[:3]) if warnings else "없음"
+
+    prompt = f"""환자 진단: {diagnosis_key}
+주요 가이드라인 (최대 5개):
+{chr(10).join(f"- {t}" for t in guideline_texts) if guideline_texts else "없음"}
+안전 검증 결과: {guardrail_route}
+경고 사항: {warning_summary}
+심각한 처리 오류 여부: {"있음" if critical_errors else "없음"}
+
+위 내용을 바탕으로 환자가 이해하기 쉬운 2~3문장 안내 메시지를 작성하라.
+- 의료 용어를 최소화하고 쉬운 말로 설명하라
+- 다음에 해야 할 행동을 명확히 안내하라
+- guardrail이 block이면 의료진 상담 필요성을 강조하라
+- caution이면 주의가 필요함을 부드럽게 안내하라
+- 메시지만 출력하라 (설명 없이).
+"""
+
+    llm_msg, error = safe_llm_invoke(
+        llm, prompt,
+        node_name="finalize_user_message",
+        fallback_value=fallback_msg,
+        parse_json=False,
+        severity="low"
+    )
+
+    user_message = (llm_msg or "").strip() or fallback_msg
+    final_answer["user_message"] = user_message
+
+    if error:
+        errors.append(error)
+        final_answer["errors"] = errors
+        final_answer["has_errors"] = True
+
+    s2 = {**s, "final_answer": final_answer, "errors": errors}
     upsert_visit_record(s2)
     return s2

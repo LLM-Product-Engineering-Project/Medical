@@ -42,9 +42,12 @@ REASON_CONFLICT_GENERAL                   = "CONFLICT_GENERAL"
 REASON_CONFLICT_NONE                      = "CONFLICT_NONE"
 
 # Source Check
-REASON_EVIDENCE_DOCTOR_DIRECT  = "EVIDENCE_DOCTOR_DIRECT"
-REASON_EVIDENCE_RAG_RETRIEVED  = "EVIDENCE_RAG_RETRIEVED"
-REASON_EVIDENCE_NO_SOURCE      = "EVIDENCE_NO_SOURCE"
+REASON_EVIDENCE_DOCTOR_DIRECT    = "EVIDENCE_DOCTOR_DIRECT"
+REASON_EVIDENCE_RAG_RETRIEVED    = "EVIDENCE_RAG_RETRIEVED"
+REASON_EVIDENCE_RAG_VERIFIED     = "EVIDENCE_RAG_VERIFIED"    # LLM 검증 통과
+REASON_EVIDENCE_RAG_UNVERIFIED   = "EVIDENCE_RAG_UNVERIFIED"  # LLM 검증 실패
+REASON_EVIDENCE_MIXED            = "EVIDENCE_MIXED"           # doctor + rag 혼합
+REASON_EVIDENCE_NO_SOURCE        = "EVIDENCE_NO_SOURCE"
 
 # Policy Routing
 REASON_ROUTE_BLOCK_HIGH_RISK       = "ROUTE_BLOCK_HIGH_RISK"
@@ -53,7 +56,7 @@ REASON_ROUTE_HITL_MEDIUM_RISK      = "ROUTE_HITL_MEDIUM_RISK"
 REASON_ROUTE_CAUTION_LOW_EVIDENCE  = "ROUTE_CAUTION_LOW_EVIDENCE"
 REASON_ROUTE_ALLOW                 = "ROUTE_ALLOW"
 
-# ── RAG 기본 retriever_score ──────────────────────────────────────────────────
-# LangChain Chroma retriever가 score를 별도 반환하지 않을 때 사용하는 기본값.
-# retriever가 score를 노출하면 이 값 대신 실제 score를 사용하도록 n_rag_search를 수정하라.
-RAG_DEFAULT_RETRIEVER_SCORE: float = 0.7
+# ── RAG retriever_score 테이블 ────────────────────────────────────────────────
+RAG_DEFAULT_RETRIEVER_SCORE: float = 0.7   # LLM 검증 미수행 시 기본값
+RAG_VERIFIED_SCORE:          float = 0.8   # LLM 검증 통과
+RAG_UNVERIFIED_SCORE:        float = 0.4   # LLM 검증 실패

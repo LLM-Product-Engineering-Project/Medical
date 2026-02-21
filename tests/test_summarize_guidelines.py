@@ -4,7 +4,7 @@ test_summarize_guidelines.py
 가이드라인 요약 노드 (n_summarize_guidelines) 단독 테스트
 
 실행 방법:
-    cd C:\Users\yebin\Desktop\Medical
+    cd C:/Users/yebin/Desktop/Medical
     python tests/test_summarize_guidelines.py
 """
 

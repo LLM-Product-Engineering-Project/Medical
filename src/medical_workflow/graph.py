@@ -4,12 +4,12 @@ from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
 
 from medical_workflow.state import WFState
-from medical_workflow.nodes.input import n_parse_input_meta, n_deidentify_redact
+from medical_workflow.nodes.input import n_parse_input_meta
 from medical_workflow.nodes.extraction import n_extract_doctor, n_extract_clinical, n_has_diagnosis
-from medical_workflow.nodes.thread import n_is_existing, n_create_thread, n_load_thread, n_detect_closure, n_close_thread
+from medical_workflow.nodes.thread import n_is_existing, n_create_thread, n_load_thread, n_detect_closure, n_close_thread, n_create_symptom_thread
 from medical_workflow.nodes.memory import n_retrieve_memories, n_should_reflect, n_reflect_patient_state
 from medical_workflow.nodes.guidelines import n_has_guideline, n_summarize_guidelines, n_safety_guardrail
-from medical_workflow.nodes.search import n_rag_query_sanitize, n_rag_to_guidelines
+from medical_workflow.nodes.search import n_rag_query_sanitize, n_rag_to_guidelines, n_rag_supplement
 from medical_workflow.nodes.rag import n_rag_search
 from medical_workflow.nodes.planning import n_plan_next_actions, n_hitl_alarm_opt_in
 from medical_workflow.nodes.alarm import n_build_alarm_plan
@@ -19,7 +19,7 @@ from medical_workflow.nodes.finalize import n_finalize
 def build_graph(llm: ChatOpenAI, retriever):
     """
     llm: LLM 객체 (ChatOpenAI)
-    retriever: RAG용 retriever (예: vector_db.as_retriever(search_kwargs={"k": 3}))
+    retriever: RAG용 retriever (예: vector_db.as_retriever(search_kwargs={"k": 1}))
 
     의료 정보 신뢰성을 위해 외부 실시간 검색 대신
     내부 검증된 문서 기반 RAG 검색을 사용합니다.
@@ -32,9 +32,8 @@ def build_graph(llm: ChatOpenAI, retriever):
     # 1️⃣ 노드 등록 (각 처리 단계 정의)
     # ---------------------------
 
-    # 입력 전처리
+    # 입력 전처리 (비식별화는 runner에서 graph.invoke() 전에 PII Middleware로 처리)
     g.add_node("parse_input_meta", n_parse_input_meta)
-    g.add_node("deidentify_redact", n_deidentify_redact)
 
     # 임상 정보 추출 (LLM 사용)
     g.add_node("extract_doctor", lambda s: n_extract_doctor(s, llm))
@@ -45,6 +44,7 @@ def build_graph(llm: ChatOpenAI, retriever):
     g.add_node("is_existing", lambda s: n_is_existing(s, llm))
     g.add_node("create_thread", lambda s: n_create_thread(s, llm))
     g.add_node("load_thread", lambda s: n_load_thread(s, llm))
+    g.add_node("create_symptom_thread", lambda s: n_create_symptom_thread(s, llm))
 
     # 메모리 조회
     g.add_node("retrieve_memories", n_retrieve_memories)
@@ -61,6 +61,7 @@ def build_graph(llm: ChatOpenAI, retriever):
     g.add_node("rag_query_sanitize", lambda s: n_rag_query_sanitize(s, llm))
     g.add_node("rag_search", lambda s: n_rag_search(s, retriever))
     g.add_node("rag_to_guidelines", lambda s: n_rag_to_guidelines(s, llm))
+    g.add_node("rag_supplement", lambda s: n_rag_supplement(s, llm, retriever))
 
     # 안전성 검증 (4단 Guardrail)
     g.add_node("safety_guardrail", lambda s: n_safety_guardrail(s, llm))
@@ -86,23 +87,30 @@ def build_graph(llm: ChatOpenAI, retriever):
     # 2️⃣ 기본 흐름 정의
     # ---------------------------
 
-    # 입력 → 비식별화 → 정보 추출 → 진단 여부 판단
-    g.add_edge("parse_input_meta", "deidentify_redact")
-    g.add_edge("deidentify_redact", "extract_doctor")
-    g.add_edge("extract_doctor", "extract_clinical")
+    # 입력 → (extract_doctor || extract_clinical 병렬) → 진단 여부 판단
+    # ※ 비식별화(redacted_transcript)는 runner에서 graph.invoke() 전에 완료됨
+    g.add_edge("parse_input_meta", "extract_doctor")
+    g.add_edge("parse_input_meta", "extract_clinical")
+    g.add_edge("extract_doctor", "has_diag")
     g.add_edge("extract_clinical", "has_diag")
 
     # ---------------------------
     # 3️⃣ 진단 여부 분기
     # ---------------------------
 
-    # 진단이 없으면 바로 종료
-    # 진단이 있으면 스레드 관리로 이동
+    # 진단 있음 → 스레드 관리
+    # 진단 없고 증상 있음 → 증상 임시 스레드 생성 후 종료
+    # 진단 없고 증상도 없음 → 바로 종료
     g.add_conditional_edges(
         "has_diag",
-        lambda s: "yes" if s.get("has_diagnosis") else "no",
-        {"yes": "is_existing", "no": "finalize"},
+        lambda s: (
+            "diagnosis" if s.get("has_diagnosis")
+            else "symptom" if s.get("has_symptom")
+            else "no"
+        ),
+        {"diagnosis": "is_existing", "symptom": "create_symptom_thread", "no": "finalize"},
     )
+    g.add_edge("create_symptom_thread", "retrieve_memories")
 
     # ---------------------------
     # 4️⃣ 기존 스레드 여부 분기
@@ -137,20 +145,28 @@ def build_graph(llm: ChatOpenAI, retriever):
     # ---------------------------
 
     # 이미 가이드라인 있으면 요약
-    # 없으면 RAG 검색 수행
+    # 증상 스레드(진단명 없음): 가이드라인/RAG/guardrail 전체 스킵 → 바로 plan_next_actions
+    #   (n_has_guideline에서 이미 has_guideline=False 강제, 여기서 구조적으로 차단)
+    # 그 외 → RAG 검색
     g.add_conditional_edges(
         "has_guideline",
-        lambda s: "yes" if s.get("has_guideline") else "no",
-        {"yes": "summarize_guidelines", "no": "rag_query_sanitize"},
+        lambda s: (
+            "yes" if s.get("has_guideline")
+            else "symptom" if s.get("has_symptom")
+            else "no"
+        ),
+        {"yes": "summarize_guidelines", "symptom": "plan_next_actions", "no": "rag_query_sanitize"},
     )
 
-    # 요약 → 안전성 검사
-    g.add_edge("summarize_guidelines", "safety_guardrail")
+    # 요약 → 보완 → 안전성 검사
+    g.add_edge("summarize_guidelines", "rag_supplement")
 
-    # 검색 → 가이드라인 변환 → 안전성 검사
+    # 검색 → 가이드라인 변환 → 보완 → 안전성 검사
     g.add_edge("rag_query_sanitize", "rag_search")
     g.add_edge("rag_search", "rag_to_guidelines")
-    g.add_edge("rag_to_guidelines", "safety_guardrail")
+    g.add_edge("rag_to_guidelines", "rag_supplement")
+
+    g.add_edge("rag_supplement", "safety_guardrail")
 
     # ---------------------------
     # 7️⃣ Guardrail 라우팅

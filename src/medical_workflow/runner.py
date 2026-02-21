@@ -13,6 +13,7 @@ from medical_workflow.state import WFState
 from medical_workflow.stores import THREAD_STORE, VISIT_STORE
 from medical_workflow.graph import build_graph
 from medical_workflow.nodes.rag import build_medical_vector_db
+from medical_workflow.pii_middleware import redact_pii
 
 
 def _setup_workflow(project_root: str, reset_stores: bool = False):
@@ -37,7 +38,7 @@ def _setup_workflow(project_root: str, reset_stores: bool = False):
     vector_db = build_medical_vector_db(file_path=data_path, persist_dir=persist_path)
     print("[STEP] vector db ready", flush=True)
 
-    retriever = vector_db.as_retriever(search_kwargs={"k": 3})
+    retriever = vector_db.as_retriever(search_kwargs={"k": 1})
 
     print("[STEP] building graph...", flush=True)
     graph = build_graph(llm, retriever)
@@ -49,6 +50,9 @@ def _setup_workflow(project_root: str, reset_stores: bool = False):
 def _process_single(graph, base_state: WFState, label: str) -> None:
     """단일 케이스 처리 (1차 호출 + HITL 2차 호출)"""
     print(f"\n===== {label} =====")
+
+    # PII Middleware: graph.invoke() 전에 이름 비식별화 적용
+    base_state = {**base_state, "redacted_transcript": redact_pii(base_state.get("transcript", ""))}
 
     result1 = graph.invoke(base_state)
     print(json.dumps(result1.get("final_answer", {}), ensure_ascii=False, indent=2))

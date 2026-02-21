@@ -86,9 +86,24 @@ def n_rag_search(s: WFState, retriever) -> WFState:
         return {**s, "rag_raw": "RAG 검색 중 오류가 발생했습니다."}
 
     if not docs:
-        return {**s, "rag_raw": "해당 질환에 대한 신뢰 가능한 가이드가 없습니다."}
+        return {**s, "rag_raw": "해당 질환에 대한 신뢰 가능한 가이드가 없습니다.", "rag_diagnosis_found": False}
+
+    # 진단명이 검색 결과에 실제로 포함되는지 확인 (CSV 첫 줄: "질환명: {병명}")
+    diagnosis = (s.get("diagnosis_key") or "").strip()
+    diagnosis_found = any(
+        diagnosis in getattr(d, "page_content", "")
+        for d in docs
+    )
 
     raw_text = "\n\n---\n\n".join(
         getattr(d, "page_content", str(d)) for d in docs
     )
-    return {**s, "rag_raw": raw_text}
+
+    new_state = {**s, "rag_raw": raw_text, "rag_diagnosis_found": diagnosis_found}
+
+    if not diagnosis_found:
+        warnings = list(s.get("warnings", []))
+        warnings.append(f"⚠️ RAG에서 추출 불가: '{diagnosis}'에 해당하는 데이터가 의료 DB에 없습니다.")
+        new_state["warnings"] = warnings
+
+    return new_state

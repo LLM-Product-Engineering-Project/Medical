@@ -21,6 +21,13 @@ class WFState(TypedDict, total=False):
     extracted: Dict[str, Any]
     has_diagnosis: bool
     diagnosis_key: Optional[str]
+    # diagnosis_key와 분리된 상태 정보 (치료 단계·반응 등)
+    disease_status: Optional[str]    # 예: "항암치료 반응 양호", "2차 항암치료 진행 중"
+
+    # symptom thread
+    has_symptom: bool
+    symptom_keys: Optional[List[str]]    # 추출된 증상 목록
+    symptom_summary: Optional[str]       # 스레드 키용 요약 (예: "발열_손발물집")
 
     # thread
     is_existing: bool
@@ -37,7 +44,9 @@ class WFState(TypedDict, total=False):
     # RAG
     rag_query: Optional[str]
     rag_raw: Optional[Dict[str, Any]]
+    rag_supplement_raw: Optional[str]    # rag_supplement가 검색한 원문 (guardrail 검증용)
     rag_guidelines: Optional[List[Dict[str, Any]]]
+    rag_diagnosis_found: Optional[bool]  # CSV에 해당 진단명 존재 여부
 
     # safety
     safe_guidelines: Optional[List[Dict[str, Any]]]
@@ -72,6 +81,7 @@ class WFState(TypedDict, total=False):
     # error tracking
     errors: List[Dict[str, Any]]
     warnings: List[str]
+    has_errors: bool  # LLM 실패·빈입력 등 에러 발생 시 노드에서 직접 설정
 
     # output
     final_answer: Dict[str, Any]

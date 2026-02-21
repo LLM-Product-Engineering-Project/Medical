@@ -5,6 +5,10 @@ from medical_workflow.stores import safe_llm_invoke
 
 
 def n_has_guideline(s: WFState, llm) -> WFState:
+    # symptom 단계에서는 질환 기반 가이드라인 생성을 구조적으로 차단한다.
+    # (진단명 없이 RAG/LLM이 질환 추론하는 것 방지)
+    if s.get("has_symptom"):
+        return {**s, "has_guideline": False}
     return {**s, "has_guideline": bool((s.get("extracted") or {}).get("doctor_guidelines"))}
 
 
@@ -45,20 +49,27 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
     if s.get("safety_checked"):
         return s
     from medical_workflow.guardrail_policy import (
-        RISK_WEIGHTS, ROUTING_POLICY, RAG_DEFAULT_RETRIEVER_SCORE,
+        RISK_WEIGHTS, ROUTING_POLICY,
+        RAG_VERIFIED_SCORE, RAG_UNVERIFIED_SCORE,
         REASON_RISK_CLEAR,
         REASON_CONFLICT_NONE,
-        REASON_EVIDENCE_DOCTOR_DIRECT, REASON_EVIDENCE_RAG_RETRIEVED, REASON_EVIDENCE_NO_SOURCE,
+        REASON_EVIDENCE_DOCTOR_DIRECT,
+        REASON_EVIDENCE_RAG_VERIFIED, REASON_EVIDENCE_RAG_UNVERIFIED,
+        REASON_EVIDENCE_MIXED,
+        REASON_EVIDENCE_NO_SOURCE,
         REASON_ROUTE_BLOCK_HIGH_RISK, REASON_ROUTE_HITL_CONFLICT,
         REASON_ROUTE_HITL_MEDIUM_RISK, REASON_ROUTE_CAUTION_LOW_EVIDENCE, REASON_ROUTE_ALLOW,
     )
     from medical_workflow.stores import now_iso
 
-    # 입력 가이드라인 결정
-    if s.get("has_guideline"):
-        guidelines = (s.get("extracted") or {}).get("doctor_guidelines", [])
-    else:
-        guidelines = s.get("rag_guidelines") or []
+    # 입력 가이드라인 결정: doctor_guidelines + rag_guidelines 항상 병합
+    # - has_guideline=True 경로: rag_supplement가 rag 항목을 doctor_guidelines에 합칠 수 있고,
+    #   별도로 rag_guidelines가 존재할 수도 있으므로 항상 양쪽을 합산한다.
+    # - has_guideline=False 경로: doctor_guidelines=[] 이므로 사실상 rag_guidelines만.
+    # - 프로덕션 실행 시 경로 분기 때문에 중복이 생기지 않는다.
+    _doctor_guidelines = (s.get("extracted") or {}).get("doctor_guidelines") or []
+    _rag_guidelines    = s.get("rag_guidelines") or []
+    guidelines = _doctor_guidelines + _rag_guidelines
 
     errors = list(s.get("errors", []))
     warnings = list(s.get("warnings", []))
@@ -70,10 +81,11 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
         "아래 의료 가이드라인에서 위험한 의료 지시를 탐지하세요.\n\n"
         f"가이드라인:\n{guidelines}\n\n"
         "탐지 대상 reason_code (해당하는 것만):\n"
-        "- RISK_DRUG_DOSAGE_CHANGE: 환자/비의료인이 약물 용량을 변경하도록 지시\n"
-        "- RISK_TREATMENT_STOP: 기존 치료·약물·처방 중단 권고\n"
+        "- RISK_DRUG_DOSAGE_CHANGE: 환자 스스로 처방 없이 약물 용량·종류를 임의로 변경하도록 지시하는 경우. "
+        "의사가 정상적으로 처방을 추가하거나 변경하는 것, 복약 순응도를 당부하는 것은 해당하지 않음.\n"
+        "- RISK_TREATMENT_STOP: 현재 진행 중인 치료·약물을 근거 없이 중단하도록 권고\n"
         "- RISK_EMERGENCY_DISMISSAL: 응급 증상(흉통·의식저하 등) 무시·축소\n"
-        "- RISK_NEW_DIAGNOSIS_ASSERTION: 검사 없이 새 질병을 단정 진단\n"
+        "- RISK_NEW_DIAGNOSIS_ASSERTION: 충분한 검사 없이 새 질병을 단정 진단\n"
         "- RISK_GENERAL_DANGER: 위 외 명백히 위험한 의료 권고\n\n"
         "해당 없으면 detected=[].\n"
         "반드시 JSON으로만 응답:\n"
@@ -119,16 +131,22 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
         or "없음"
     )
     conflict_prompt = (
-        "환자의 기존 건강 정보와 현재 가이드라인 간 충돌을 탐지하세요.\n\n"
-        f"환자 메모리:\n{formatted_memories}\n\n"
+        "환자의 기존 건강 정보와 현재 가이드라인 간 의학적 충돌을 탐지하세요.\n\n"
+        f"환자 메모리 (과거 진료 기록·맥락):\n{formatted_memories}\n\n"
         f"현재 진단: {s.get('diagnosis_key')}\n"
         f"현재 가이드라인:\n{guidelines}\n\n"
+        "충돌 정의 (아래 경우만 해당):\n"
+        "- 기저질환·알레르기 등으로 인해 권고 자체가 해당 환자에게 금기이거나 의학적으로 위험한 경우\n"
+        "- 가이드라인 간 상충 (예: doctor 권고 vs RAG 권고가 반대 방향)\n\n"
+        "충돌이 아닌 것 (탐지 금지):\n"
+        "- 환자가 현재 가이드라인을 따르지 않고 있는 것 (비순응/adherence gap) → 충돌 아님\n"
+        "- 메모리에 '운동 못함', '식이 조절 안 됨' 등 순응도 관련 내용 → 충돌 아님\n"
+        "- 환자의 현재 상태와 가이드라인의 단순 차이 → 충돌 아님\n\n"
         "탐지 대상 reason_code (해당하는 것만):\n"
-        "- CONFLICT_COMORBIDITY_DIET: 기저질환과 식이 가이드라인 충돌\n"
-        "- CONFLICT_COMORBIDITY_MEDICATION: 기저질환과 약물 권고 충돌\n"
-        "- CONFLICT_ALLERGY_CONTRAINDICATION: 알레르기·금기 위반\n"
-        "- CONFLICT_GENERAL: 기타 명확한 맥락 충돌\n\n"
-        "severity는 0.0–1.0 (명확한 충돌=1.0, 가능성=0.6).\n"
+        "- CONFLICT_COMORBIDITY_DIET: 기저질환과 식이 가이드라인이 의학적으로 충돌\n"
+        "- CONFLICT_COMORBIDITY_MEDICATION: 기저질환과 약물 권고가 의학적으로 충돌\n"
+        "- CONFLICT_ALLERGY_CONTRAINDICATION: 알레르기·금기 위반\n\n"
+        "severity는 0.0–1.0 (명확한 금기=1.0, 가능성=0.6).\n"
         "해당 없으면 detected=[].\n"
         "반드시 JSON으로만 응답:\n"
         '{"detected": [{"reason_code": "CONFLICT_COMORBIDITY_DIET", '
@@ -166,40 +184,104 @@ def n_safety_guardrail(s: WFState, llm) -> WFState:
         "ts": now_iso(),
     })
 
-    # ── Stage 3: Source Check (rule-based) → evidence_items ──────────────
-    if s.get("has_guideline"):
-        evidence_items = [
-            {
-                "span":             g.get("text", ""),
-                "memory_id":        None,
-                "source":           "doctor",
-                "retriever_score":  1.0,
-                "reason_code":      REASON_EVIDENCE_DOCTOR_DIRECT,
-            }
-            for g in guidelines
+    # ── Stage 3: Source Check (rule-based + LLM 검증) → evidence_items ───
+    # [DEBUG] source_check 입력 현황 출력 — rag가 들어왔는데 0으로 떨어지는 지점 확인용
+    _debug_sources = [g.get("source", "?") for g in guidelines]
+    print(
+        f"[DEBUG source_check] doctor_guidelines={len(_doctor_guidelines)}, "
+        f"rag_guidelines={len(_rag_guidelines)}, "
+        f"merged_total={len(guidelines)}, "
+        f"sources={_debug_sources}",
+        flush=True,
+    )
+
+    # RAG 원문: rag_search 결과 또는 rag_supplement 결과 중 사용 가능한 것
+    rag_source_text = s.get("rag_raw") or s.get("rag_supplement_raw") or ""
+
+    # RAG 가이드라인 일괄 LLM 검증
+    rag_indices = [i for i, g in enumerate(guidelines) if g.get("source") == "rag"]
+    rag_verified: dict[int, bool] = {}
+
+    if rag_indices and rag_source_text:
+        items_to_verify = [
+            {"idx": i, "text": guidelines[i].get("text", "")}
+            for i in rag_indices
         ]
-    elif guidelines:   # rag_guidelines 존재
-        evidence_items = [
-            {
-                "span":             g.get("text", ""),
-                "memory_id":        None,
-                "source":           g.get("source", "rag"),
-                "retriever_score":  RAG_DEFAULT_RETRIEVER_SCORE,
-                "reason_code":      REASON_EVIDENCE_RAG_RETRIEVED,
-            }
-            for g in guidelines
-        ]
-    else:
-        evidence_items = []
+        verify_prompt = (
+            "아래 가이드라인 목록에서 각 항목이 검색 결과 원문에 실제로 근거하는 내용인지 확인하라.\n\n"
+            f"가이드라인:\n{items_to_verify}\n\n"
+            f"검색 결과 원문:\n{rag_source_text}\n\n"
+            "JSON 배열만 응답 (다른 텍스트 없이):\n"
+            '[{"idx": 0, "verified": true}, {"idx": 1, "verified": false}]'
+        )
+        verify_raw, verify_error = safe_llm_invoke(
+            llm, verify_prompt,
+            node_name="safety_guardrail_source_verify",
+            fallback_value=[],
+            parse_json=True,
+            severity="medium",
+        )
+        if verify_error:
+            errors.append(verify_error)
+        if isinstance(verify_raw, list):
+            for item in verify_raw:
+                if isinstance(item, dict) and "idx" in item:
+                    rag_verified[item["idx"]] = bool(item.get("verified", False))
+
+    evidence_items = []
+    for i, g in enumerate(guidelines):
+        source = g.get("source", "")
+        if source == "doctor":
+            evidence_items.append({
+                "span":            g.get("text", ""),
+                "memory_id":       None,
+                "source":          "doctor",
+                "retriever_score": 1.0,
+                "reason_code":     REASON_EVIDENCE_DOCTOR_DIRECT,
+            })
+        elif source == "rag":
+            verified = rag_verified.get(i, False)
+            evidence_items.append({
+                "span":            g.get("text", ""),
+                "memory_id":       None,
+                "source":          "rag",
+                "retriever_score": RAG_VERIFIED_SCORE if verified else RAG_UNVERIFIED_SCORE,
+                "reason_code":     REASON_EVIDENCE_RAG_VERIFIED if verified else REASON_EVIDENCE_RAG_UNVERIFIED,
+            })
+        else:
+            evidence_items.append({
+                "span":            g.get("text", ""),
+                "memory_id":       None,
+                "source":          source,
+                "retriever_score": 0.0,
+                "reason_code":     REASON_EVIDENCE_NO_SOURCE,
+            })
+
+    # [DEBUG] evidence_items 최종 결과
+    print(
+        f"[DEBUG source_check] evidence_items={len(evidence_items)}, "
+        f"item_sources={[e.get('source') for e in evidence_items]}",
+        flush=True,
+    )
 
     evidence_score = (
         sum(e["retriever_score"] for e in evidence_items) / len(evidence_items)
         if evidence_items else 0.0
     )
-    evidence_reason_codes = (
-        list({e["reason_code"] for e in evidence_items})
-        or [REASON_EVIDENCE_NO_SOURCE]
-    )
+    # source_check summary: per-item reason_code set → 전체 소스 유형 한 줄 요약
+    # doctor only → EVIDENCE_DOCTOR_DIRECT
+    # rag only    → rag per-item codes (EVIDENCE_RAG_VERIFIED / EVIDENCE_RAG_UNVERIFIED)
+    # doctor+rag  → EVIDENCE_MIXED  (rag 포함 시 doctor_direct 단독 표기 금지)
+    _has_doctor = any(e.get("source") == "doctor" for e in evidence_items)
+    _has_rag    = any(e.get("source") == "rag"    for e in evidence_items)
+    if _has_doctor and _has_rag:
+        evidence_reason_codes = [REASON_EVIDENCE_MIXED]
+    elif _has_doctor:
+        evidence_reason_codes = [REASON_EVIDENCE_DOCTOR_DIRECT]
+    elif _has_rag:
+        evidence_reason_codes = list({e["reason_code"] for e in evidence_items if e.get("source") == "rag"}) or [REASON_EVIDENCE_RAG_UNVERIFIED]
+    else:
+        evidence_reason_codes = [REASON_EVIDENCE_NO_SOURCE]
     decision_log.append({
         "stage": "source_check",
         "reason_codes": evidence_reason_codes,

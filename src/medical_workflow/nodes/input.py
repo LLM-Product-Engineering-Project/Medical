@@ -1,8 +1,13 @@
-"""입력 파싱 및 개인정보 비식별화 노드"""
+"""입력 파싱 노드
+
+비식별화는 PII Middleware(pii_middleware.py)에서 그래프 실행 전에 처리한다.
+n_deidentify_redact는 테스트 코드 호환성을 위해 래퍼로만 남겨둔다.
+"""
 
 import re
 
 from medical_workflow.state import WFState
+from medical_workflow.pii_middleware import redact_pii
 
 
 def n_parse_input_meta(s: WFState) -> WFState:
@@ -18,16 +23,6 @@ def n_parse_input_meta(s: WFState) -> WFState:
 
 
 def n_deidentify_redact(s: WFState) -> WFState:
-    t = s.get("transcript", "")
-
-    t = re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[REDACTED_EMAIL]", t)
-    t = re.sub(r"\b01[016789]-?\d{3,4}-?\d{4}\b", "[REDACTED_PHONE]", t)
-    t = re.sub(r"\b0\d{1,2}-?\d{3,4}-?\d{4}\b", "[REDACTED_PHONE]", t)
-    t = re.sub(r"\b\d{6}-?\d{7}\b", "[REDACTED_RRN]", t)
-    t = re.sub(
-        r"(서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)\s?[^\n]{0,20}(구|군|시|동|로|길)\s?\d{0,4}",
-        "[REDACTED_ADDRESS]",
-        t,
-    )
-
+    """테스트 호환용 래퍼 — 그래프 노드로는 더 이상 사용하지 않는다."""
+    t = redact_pii(s.get("transcript", ""))
     return {**s, "redacted_transcript": t}
