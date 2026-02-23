@@ -37,37 +37,39 @@ LANGSMITH_API_KEY=your_key_here     # 선택 - 트레이싱
 
 ## 실행
 
-`Recording_YYYYMMDD.txt` 형식의 진료 전사 텍스트 파일을 프로젝트 루트에 배치 후 실행:
+`Recording_YYYYMMDD.txt` 형식의 진료 전사 텍스트 파일을 `data/recordings/`에 배치 후 실행:
 
 ```
 Medical/
-├── Recording_20240101.txt
-├── Recording_20240102.txt
 ├── main.py                         # 엔트리포인트 (thin wrapper)
 ├── data/
+│   ├── recordings/
+│   │   └── Recording_YYYYMMDD.txt  # 진료 전사 텍스트 (txt 모드 입력)
 │   ├── medical_2.csv               # 서울대병원 의학정보
-│   └── testcase(50).xlsx           # 테스트 케이스 (환자별 케이스)
+│   ├── testcase(50).xlsx           # 테스트 케이스 (환자별 케이스)
+│   └── chroma_db/                  # ChromaDB 영속 저장 (자동 생성)
 └── src/medical_workflow/           # 핵심 로직
     ├── runner.py                   # run_many(), run_from_xlsx(), main()
     ├── graph.py                    # LangGraph 워크플로우
     ├── state.py                    # 상태 정의
     ├── config.py                   # 환경 변수 로드
+    ├── pii_middleware.py           # PII 미들웨어 (한국 이름 비식별화)
     ├── stores.py                   # 하위 호환 래퍼
     ├── utils/                      # 유틸리티 패키지
     │   ├── llm.py                  # safe_llm_invoke
     │   ├── parsing.py              # parse_json_safely
-    │   └── helpers.py              # thread_key, now_iso
+    │   └── helpers.py              # thread_key, now_iso, symptom_thread_key
     ├── stores/                     # 저장소 패키지
     │   ├── thread.py               # THREAD_STORE 관리
     │   └── visit.py                # VISIT_STORE 관리
-    └── nodes/                      # 그래프 노드들 (23개)
-        ├── input.py                # 메타 파싱, 비식별화
+    └── nodes/                      # 그래프 노드들 (24개)
+        ├── input.py                # 메타 파싱
         ├── extraction.py           # 임상 정보 추출
-        ├── thread.py               # 스레드 관리
+        ├── thread.py               # 스레드 관리, 증상→진단 승격
         ├── memory.py               # 메모리 조회, 리플렉션
         ├── guidelines.py           # 가이드라인 처리
-        ├── rag.py                  # RAG 검색
-        ├── search.py               # RAG 파이프라인
+        ├── rag.py                  # ChromaDB 벡터 DB 구축 및 검색
+        ├── search.py               # RAG 파이프라인 (쿼리 정제, 보완)
         ├── planning.py             # 액션 계획
         ├── alarm.py                # 알람 생성
         └── finalize.py             # 최종 응답
@@ -94,13 +96,14 @@ python main.py p01
 
 ## 주요 기능
 
-1. **개인정보 비식별화** - 이메일, 전화번호, 주민등록번호, 주소 자동 마스킹
-2. **임상 정보 추출** - LLM 기반 진단명, 치료 가이드라인 추출 (에러 핸들링 적용)
-3. **스레드 관리** - 질병별 진료 기록 연속성 유지
-4. **Memory & Reflection** - 누적 기록 기반 환자 상태 요약
-5. **RAG 검색** - ChromaDB + 서울대병원 의학정보 (medical_2.csv) 기반 가이드라인 제공
-6. **HITL 알람** - 환자 동의 후 생활습관 알람 일정표 생성
-7. **에러 핸들링** - LLM 노드 실패 시 안전한 fallback 및 명시적 경고
+1. **개인정보 비식별화** - 한국 이름 탐지·마스킹 (`pii_middleware.py`, 그래프 실행 전 처리)
+2. **임상 정보 추출** - LLM 기반 진단명, 증상, 치료 가이드라인 추출 (에러 핸들링 적용)
+3. **스레드 관리** - 질병별 진료 기록 연속성 유지 (LLM 4단계 매칭: 동명이진·표현차이·증상→진단 승격)
+4. **증상 임시 스레드** - 진단 없이 증상만 있을 때 스레드 생성, 진단 확정 시 자동 승격
+5. **Memory & Reflection** - 누적 기록 기반 환자 상태 요약
+6. **RAG 검색** - ChromaDB + 서울대병원 의학정보 (medical_2.csv) 기반 가이드라인 제공 (보완 포함)
+7. **HITL 알람** - 환자 동의 후 생활습관 알람 일정표 생성
+8. **에러 핸들링** - LLM 노드 실패 시 안전한 fallback 및 명시적 경고
 
 ## 에러 핸들링
 
