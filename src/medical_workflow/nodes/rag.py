@@ -15,6 +15,10 @@ def build_medical_vector_db(file_path: str, persist_dir: str | None = None):
 
     - persist_dir가 존재하고 DB가 이미 있으면 → 즉시 로드
     - 없으면 CSV 기반으로 생성 후 디스크에 저장
+
+    배치 임베딩 최적화:
+    - embed_documents()로 전체 텍스트를 한 번에 임베딩하여 API 호출 오버헤드 감소
+    - from_embeddings()로 사전 계산된 벡터를 사용하여 DB 생성
     """
 
     embeddings = UpstageEmbeddings(model="solar-embedding-1-large")
@@ -53,11 +57,20 @@ def build_medical_vector_db(file_path: str, persist_dir: str | None = None):
         axis=1,
     )
 
-    vector_db = Chroma.from_texts(
-        texts=df["combined_text"].tolist(),
+    texts = df["combined_text"].tolist()
+
+    # 배치 임베딩: embed_documents()로 전체 텍스트를 한 번에 처리
+    # from_texts()는 내부적으로 순차 임베딩을 수행하여 ~1800건에서 5분 이상 소요
+    # embed_documents()는 배치 처리로 API 호출 횟수를 대폭 줄여 성능 향상
+    print(f"[VectorDB] {len(texts)}건 배치 임베딩 시작...")
+    vectors = embeddings.embed_documents(texts)
+    print(f"[VectorDB] 배치 임베딩 완료, DB 생성 중...")
+
+    vector_db = Chroma.from_embeddings(
+        text_embeddings=list(zip(texts, vectors)),
         embedding=embeddings,
         collection_name="medical_info",
-        persist_directory=persist_dir,  # 🔥 핵심 추가
+        persist_directory=persist_dir,
     )
 
     # 명시적 persist (안전)
